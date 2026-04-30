@@ -9,6 +9,7 @@ const links = [
   { href: "/queue", label: "Queue" },
   { href: "/cost", label: "Cost" },
   { href: "/perf", label: "Performance" },
+  { href: "/eval", label: "Evaluation" },
 ];
 
 export function Nav() {
