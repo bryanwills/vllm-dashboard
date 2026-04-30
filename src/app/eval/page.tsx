@@ -135,15 +135,31 @@ function formatTime(iso: string): string {
   return `${month} ${d.getDate()} ${timeStr}`;
 }
 
+function commitFromImage(image: string | null): string | null {
+  if (!image) return null;
+  const slash = image.lastIndexOf("/");
+  const colon = image.lastIndexOf(":");
+  if (colon <= slash) return null;
+
+  const tag = image.slice(colon + 1).split("@")[0];
+  const nightlyMatch = tag.match(/^nightly-([0-9a-f]{7,40})(?:[-_.].*)?$/i);
+  if (nightlyMatch) return nightlyMatch[1];
+
+  const shaMatch = tag.match(/(?:^|[-_.])([0-9a-f]{12,40})(?:$|[-_.])/i);
+  return shaMatch?.[1] ?? null;
+}
+
 function shortCommit(row: {
   vllm_commit: string | null;
   buildkite_commit: string | null;
   git_hash: string | null;
+  image: string | null;
 }): string {
-  // Prefer the actual vLLM commit (sent by perf-eval ingest when the build
-  // pinned VLLM_COMMIT). Fall back to buildkite_commit, which is the
-  // perf-eval pipeline SHA, and finally to git_hash from lm_eval.
-  const s = row.vllm_commit ?? row.buildkite_commit ?? row.git_hash;
+  const s =
+    commitFromImage(row.image) ??
+    row.vllm_commit ??
+    row.buildkite_commit ??
+    row.git_hash;
   return s ? s.slice(0, 7) : "—";
 }
 

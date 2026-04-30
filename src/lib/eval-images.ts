@@ -2,7 +2,7 @@ import { load } from "js-yaml";
 
 const PERF_EVAL_RAW_BASE =
   "https://raw.githubusercontent.com/vllm-project/perf-eval";
-const DEFAULT_VLLM_IMAGE = "vllm/vllm-openai:latest";
+const VLLM_COMMIT_IMAGE_PREFIX = "vllm/vllm-openai:nightly-";
 const workloadImageCache = new Map<string, Promise<string | null>>();
 
 interface EvalImageCore {
@@ -15,6 +15,7 @@ export interface EvalImageMessage extends EvalImageCore {
   workload?: string;
   source_file?: string;
   buildkite_commit?: string;
+  vllm_commit?: string;
   [key: string]: unknown;
 }
 
@@ -52,7 +53,7 @@ async function resolveWorkloadImage(
 
     const parsed = recordValue(load(await response.text()));
     const vllm = recordValue(parsed.vllm);
-    return stringValue(vllm.image) ?? DEFAULT_VLLM_IMAGE;
+    return stringValue(vllm.image);
   }
   return null;
 }
@@ -100,6 +101,9 @@ export async function resolveEvalImage(
 ): Promise<string | null> {
   const image = imageFromMessage(raw, core, taskName);
   if (image) return image;
+
+  const vllmCommit = stringValue(raw.vllm_commit);
+  if (vllmCommit) return `${VLLM_COMMIT_IMAGE_PREFIX}${vllmCommit}`;
 
   const workload = raw.workload ?? workloadFromSourceFile(raw.source_file);
   if (!raw.buildkite_commit || !workload) return null;
