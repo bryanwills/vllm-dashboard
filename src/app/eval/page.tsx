@@ -52,6 +52,7 @@ interface EvalRow {
 interface FiltersResponse {
   models: string[];
   tasks: string[];
+  images: string[];
   filters: string[];
   metrics: string[];
 }
@@ -709,6 +710,7 @@ function LatestStatCards({
 export default function EvalPage() {
   const [model, setModel] = useState("");
   const [task, setTask] = useState("");
+  const [image, setImage] = useState("");
   const [metric, setMetric] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedRow, setSelectedRow] = useState<EvalRow | null>(null);
@@ -721,6 +723,7 @@ export default function EvalPage() {
   const params = new URLSearchParams();
   if (model) params.set("model", model);
   if (task) params.set("task", task);
+  if (image) params.set("image", image);
 
   const { data, isLoading } = useSWR<{ rows: EvalRow[] }>(
     `/api/eval?${params.toString()}`,
@@ -760,6 +763,13 @@ export default function EvalPage() {
           onChange={setTask}
           options={filters?.tasks ?? []}
           allLabel="All Tasks"
+        />
+        <SearchableSelect
+          label="Image"
+          value={image}
+          onChange={setImage}
+          options={filters?.images ?? []}
+          allLabel="All Images"
         />
         <SearchableSelect
           label="Metric"

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveEvalImage } from "@/lib/eval-images";
 import { queryDatabricks } from "@/lib/databricks";
 
 interface RawRow {
@@ -7,11 +8,16 @@ interface RawRow {
 
 interface LmEvalCore {
   config?: { model_args?: { model?: string } };
+  configs?: Record<string, Record<string, unknown>>;
   results?: Record<string, Record<string, unknown>>;
 }
 
 interface LmEvalMessage extends LmEvalCore {
   data?: LmEvalCore;
+  workload?: string;
+  source_file?: string;
+  buildkite_commit?: string;
+  [key: string]: unknown;
 }
 
 export async function GET() {
@@ -26,6 +32,8 @@ export async function GET() {
     const tasks = new Set<string>();
     const filters = new Set<string>();
     const metrics = new Set<string>();
+    const images = new Set<string>();
+    const imageLookups: Promise<void>[] = [];
 
     for (const r of rawRows) {
       let raw: LmEvalMessage;
@@ -40,6 +48,11 @@ export async function GET() {
       if (modelName) models.add(modelName);
       for (const taskName of Object.keys(core.results)) {
         tasks.add(taskName);
+        imageLookups.push(
+          resolveEvalImage(raw, core, taskName).then((image) => {
+            if (image) images.add(image);
+          })
+        );
         for (const key of Object.keys(core.results[taskName])) {
           if (key === "alias") continue;
           const match = key.match(/^(.+?)(?:_stderr)?,(.+)$/);
@@ -51,9 +64,12 @@ export async function GET() {
       }
     }
 
+    await Promise.all(imageLookups);
+
     return NextResponse.json({
       models: [...models].sort(),
       tasks: [...tasks].sort(),
+      images: [...images].sort(),
       filters: [...filters].sort(),
       metrics: [...metrics].sort(),
     });
