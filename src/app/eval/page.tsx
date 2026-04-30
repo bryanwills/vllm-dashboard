@@ -46,6 +46,7 @@ interface EvalRow {
   buildkite_build_url: string | null;
   buildkite_commit: string | null;
   buildkite_branch: string | null;
+  vllm_commit: string | null;
   workload: string | null;
 }
 
@@ -134,8 +135,15 @@ function formatTime(iso: string): string {
   return `${month} ${d.getDate()} ${timeStr}`;
 }
 
-function shortCommit(sha: string | null, fallback: string | null): string {
-  const s = sha ?? fallback;
+function shortCommit(row: {
+  vllm_commit: string | null;
+  buildkite_commit: string | null;
+  git_hash: string | null;
+}): string {
+  // Prefer the actual vLLM commit (sent by perf-eval ingest when the build
+  // pinned VLLM_COMMIT). Fall back to buildkite_commit, which is the
+  // perf-eval pipeline SHA, and finally to git_hash from lm_eval.
+  const s = row.vllm_commit ?? row.buildkite_commit ?? row.git_hash;
   return s ? s.slice(0, 7) : "—";
 }
 
@@ -191,7 +199,7 @@ function ScoreChart({
         line: { color, width: 2, shape: "spline" },
         marker: { color, size: 8, line: { color: dark ? "#18181b" : "#ffffff", width: 1.5 } },
         customdata: points.map((p) => [
-          shortCommit(p.r.buildkite_commit, p.r.git_hash),
+          shortCommit(p.r),
           p.r.n_shot,
           p.r.n_samples,
           p.r.lm_eval_version ?? "—",
@@ -446,7 +454,7 @@ function SamplesDrawer({
                   buildkite #{row.buildkite_build_number}
                 </a>
               ) : null}
-              <span className="font-mono">{shortCommit(row.buildkite_commit, row.git_hash)}</span>
+              <span className="font-mono">{shortCommit(row)}</span>
               {row.image ? (
                 <span className="font-mono" title={row.image}>
                   image: {row.image}
@@ -591,10 +599,10 @@ function LeaderboardTable({
                         onClick={(e) => e.stopPropagation()}
                         className="text-blue-600 hover:underline dark:text-blue-400"
                       >
-                        {shortCommit(r.buildkite_commit, r.git_hash)}
+                        {shortCommit(r)}
                       </a>
                     ) : (
-                      shortCommit(r.buildkite_commit, r.git_hash)
+                      shortCommit(r)
                     )}
                   </td>
                   <td className="max-w-[260px] px-4 py-2 font-mono text-xs text-zinc-500">
@@ -674,7 +682,7 @@ function LatestStatCards({
       {cards.map((c) => {
         if (!c.m) return null;
         let color: "default" | "green" | "red" | "yellow" = "default";
-        const commit = shortCommit(c.latest.buildkite_commit, c.latest.git_hash);
+        const commit = shortCommit(c.latest);
         let detail = `n=${c.latest.n_samples}, ${c.latest.n_shot}-shot, ${commit}`;
         if (c.prevM) {
           const delta = c.m.value - c.prevM.value;

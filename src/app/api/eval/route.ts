@@ -36,6 +36,7 @@ export interface EvalRow {
   buildkite_build_url: string | null;
   buildkite_commit: string | null;
   buildkite_branch: string | null;
+  vllm_commit: string | null;
   workload: string | null;
 }
 
@@ -72,6 +73,7 @@ interface LmEvalMessage extends LmEvalCore {
   buildkite_commit?: string;
   buildkite_branch?: string;
   buildkite_pipeline_slug?: string;
+  vllm_commit?: string;
   [key: string]: unknown;
 }
 
@@ -190,6 +192,7 @@ export async function GET(request: NextRequest) {
           buildkite_build_url: raw.buildkite_build_url ?? null,
           buildkite_commit: raw.buildkite_commit ?? null,
           buildkite_branch: raw.buildkite_branch ?? null,
+          vllm_commit: raw.vllm_commit ?? null,
           workload,
         };
 
