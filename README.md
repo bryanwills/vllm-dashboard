@@ -9,6 +9,7 @@ A Next.js dashboard for observing vLLM's Buildkite CI: build status, job runtime
 - **Queue** — live agent queue depth, waiting builds, and Slack alerts when queues back up.
 - **Cost** — compute hours and dollar cost per queue, derived from AWS on-demand pricing.
 - **Performance** — benchmark trends ingested into the warehouse.
+- **Compare** — release-oriented baseline/candidate image deltas across performance and evaluation metrics.
 
 ## Architecture
 

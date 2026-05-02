@@ -10,6 +10,7 @@ const links = [
   { href: "/cost", label: "Cost" },
   { href: "/perf", label: "Performance" },
   { href: "/eval", label: "Evaluation" },
+  { href: "/compare", label: "Compare" },
 ];
 
 export function Nav() {

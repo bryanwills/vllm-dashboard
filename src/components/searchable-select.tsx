@@ -67,9 +67,10 @@ export function SearchableSelect({
       <button
         type="button"
         onClick={() => setOpen(!open)}
+        title={value || allLabel}
         className="flex w-48 items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-left text-sm dark:border-zinc-700 dark:bg-zinc-900"
       >
-        <span className={value ? "" : "text-zinc-400"}>
+        <span className={`min-w-0 truncate ${value ? "" : "text-zinc-400"}`}>
           {value || allLabel}
         </span>
         <svg
