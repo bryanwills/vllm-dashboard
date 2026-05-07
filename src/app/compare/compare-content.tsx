@@ -1,9 +1,10 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { SearchableSelect } from "@/components/searchable-select";
+import { DateRangePicker } from "@/components/date-range-picker";
 
 type Area = "perf" | "eval";
 type DeltaStatus = "regression" | "improvement" | "unchanged" | "noisy";
@@ -268,17 +269,17 @@ function VerdictHero({
   const s = summary;
   const coverage = s.missingBaseline + s.missingCandidate;
   let kind: "good" | "bad" | "warn" = "good";
-  let title = "Ready to ship";
-  let sub = `No regressions exceed the ${perfThreshold.toFixed(1)}% threshold. ${s.improvements} direction-aware wins, ${s.unchanged} within noise.`;
+  let title = "No regressions";
+  let sub = `${s.improvements} improvement${s.improvements === 1 ? "" : "s"}, ${s.unchanged} within ±${perfThreshold.toFixed(1)}% noise.`;
 
   if (s.regressions > 0) {
     kind = "bad";
-    title = "Hold ship — regressions detected";
-    sub = `${s.regressions} check${s.regressions > 1 ? "s" : ""} exceeded the configured threshold. Investigate worst regressions before promoting.`;
+    title = `${s.regressions} regression${s.regressions > 1 ? "s" : ""}`;
+    sub = `${s.regressions} check${s.regressions > 1 ? "s" : ""} beyond ±${perfThreshold.toFixed(1)}%.`;
   } else if (coverage > 0) {
     kind = "warn";
-    title = "Ready, with coverage gaps";
-    sub = `${coverage} check${coverage > 1 ? "s" : ""} missing across the two images. Review what's missing before signing off.`;
+    title = `${coverage} coverage gap${coverage > 1 ? "s" : ""}`;
+    sub = `${coverage} check${coverage > 1 ? "s" : ""} missing across the two images.`;
   }
 
   const statusLabelText =
@@ -332,7 +333,7 @@ function VerdictHero({
           <MiniStat
             label="Wins"
             big={String(s.improvements)}
-            sub="direction-aware"
+            sub="above threshold"
             tone="good"
             mono
           />
@@ -450,7 +451,7 @@ function SummaryStrip({
         dot="bg-emerald-500"
         value={s.improvements}
         valueClass={s.improvements ? "text-emerald-600 dark:text-emerald-400" : ""}
-        hint="Direction-aware wins"
+        hint={`Beyond ±${perfThreshold.toFixed(1)}% threshold`}
       />
       <SimpleStat
         label="Noise"
@@ -1150,6 +1151,8 @@ export default function ComparePage() {
       searchParams.get("perf_threshold") ?? searchParams.get("perfThreshold")
     ) ?? "2"
   );
+  const [startDate, setStartDate] = useState(searchParams.get("start") ?? "");
+  const [endDate, setEndDate] = useState(searchParams.get("end") ?? "");
 
   const [statusFilters, setStatusFilters] = useState<Record<DeltaStatus, boolean>>({
     regression: true,
@@ -1223,13 +1226,40 @@ export default function ComparePage() {
     updateCompareUrl({ perfThresholdPct: value });
   };
 
-  const { data: perfFilters } = useSWR<PerfFilters>("/api/perf/filters", fetcher);
-  const { data: evalFilters } = useSWR<EvalFilters>("/api/eval/filters", fetcher);
+  const filtersQuery = useMemo(() => {
+    const p = new URLSearchParams();
+    if (startDate) p.set("start", startDate);
+    if (endDate) p.set("end", endDate);
+    const qs = p.toString();
+    return qs ? `?${qs}` : "";
+  }, [startDate, endDate]);
+
+  const { data: perfFilters } = useSWR<PerfFilters>(
+    `/api/perf/filters${filtersQuery}`,
+    fetcher
+  );
+  const { data: evalFilters } = useSWR<EvalFilters>(
+    `/api/eval/filters${filtersQuery}`,
+    fetcher
+  );
 
   const imageOptions = useMemo(
     () => uniqueSorted([...(perfFilters?.images ?? []), ...(evalFilters?.images ?? [])]),
     [perfFilters?.images, evalFilters?.images]
   );
+
+  useEffect(() => {
+    if (imageOptions.length === 0) return;
+    if (baseline && !imageOptions.includes(baseline)) {
+      setBaseline("");
+      updateCompareUrl({ baseline: "" });
+    }
+    if (candidate && !imageOptions.includes(candidate)) {
+      setCandidate("");
+      updateCompareUrl({ candidate: "" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageOptions]);
   const modelOptions = useMemo(
     () => uniqueSorted([...(perfFilters?.models ?? []), ...(evalFilters?.models ?? [])]),
     [perfFilters?.models, evalFilters?.models]
@@ -1338,7 +1368,7 @@ export default function ComparePage() {
         <h1 className="text-3xl font-semibold tracking-tight">Perf &amp; Eval Compare</h1>
         <p className="mt-1 max-w-prose text-sm text-zinc-500 dark:text-zinc-400">
           Compare two vLLM images across performance benchmarks and accuracy
-          evaluations. Verdict reflects the configured perf and eval thresholds.
+          evaluations.
         </p>
       </div>
 
@@ -1409,6 +1439,19 @@ export default function ComparePage() {
               </span>
             </div>
           </label>
+          <div>
+            <span className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+              Date range
+            </span>
+            <DateRangePicker
+              startDate={startDate}
+              endDate={endDate}
+              onChange={(s, e) => {
+                setStartDate(s);
+                setEndDate(e);
+              }}
+            />
+          </div>
         </div>
       </div>
 
@@ -1421,7 +1464,7 @@ export default function ComparePage() {
       {hasFilters && (!baseline || !candidate) && (
         <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700">
           <span className="text-sm text-zinc-400">
-            Select a baseline image and a candidate image to compare release metrics.
+            Select a baseline and candidate image to compare.
           </span>
         </div>
       )}
@@ -1595,7 +1638,7 @@ export default function ComparePage() {
             <DeltaTable
               kind="perf"
               title="Performance delta"
-              subtitle="Throughput, latency, and tokens-per-second deltas across configs."
+              subtitle=""
               rows={perfRows}
               totalCount={data.perf.deltas.length}
               thresholds={{ perfPct: perfThreshold }}
@@ -1608,7 +1651,7 @@ export default function ComparePage() {
             <DeltaTable
               kind="eval"
               title="Accuracy delta"
-              subtitle="Eval task scores compared in percentage points."
+              subtitle=""
               rows={evalRows}
               totalCount={data.eval.deltas.length}
               thresholds={{ perfPct: perfThreshold }}

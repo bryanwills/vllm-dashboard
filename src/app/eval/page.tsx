@@ -421,6 +421,7 @@ function SamplesDrawer({
   const params = new URLSearchParams();
   params.set("build_id", row.buildkite_build_id ?? "");
   params.set("task", row.task);
+  if (row.workload) params.set("workload", row.workload);
   if (correctness === "correct") params.set("correct", "true");
   if (correctness === "incorrect") params.set("correct", "false");
   params.set("limit", "200");

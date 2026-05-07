@@ -1,8 +1,24 @@
 import { NextResponse } from "next/server";
 import { queryDatabricks } from "@/lib/databricks";
 
-export async function GET() {
+function isIsoDate(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}/.test(s);
+}
+
+export async function GET(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const start = searchParams.get("start");
+    const end = searchParams.get("end");
+
+    const conditions = ["message:model IS NOT NULL"];
+    if (start && isIsoDate(start)) {
+      conditions.push(`message:date::STRING >= '${start.slice(0, 10)}'`);
+    }
+    if (end && isIsoDate(end)) {
+      conditions.push(`message:date::STRING <= '${end.slice(0, 10)}'`);
+    }
+
     const rows = await queryDatabricks<{
       model: string;
       device: string;
@@ -19,7 +35,7 @@ export async function GET() {
         message:precision::STRING AS precision,
         message:image::STRING AS image
       FROM vllm_data_warehouse.default.vllm_perf_data_ingest
-      WHERE message:model IS NOT NULL
+      WHERE ${conditions.join(" AND ")}
       ORDER BY model, device
     `);
 

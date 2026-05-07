@@ -10,6 +10,7 @@ interface LmEvalCore {
   config?: { model_args?: { model?: string } };
   configs?: Record<string, Record<string, unknown>>;
   results?: Record<string, Record<string, unknown>>;
+  date?: number;
 }
 
 interface LmEvalMessage extends LmEvalCore {
@@ -20,12 +21,42 @@ interface LmEvalMessage extends LmEvalCore {
   [key: string]: unknown;
 }
 
-export async function GET() {
+function parseDateParam(s: string | null): number | null {
+  if (!s) return null;
+  const ms = Date.parse(s);
+  if (Number.isNaN(ms)) return null;
+  return Math.floor(ms / 1000);
+}
+
+export async function GET(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const startEpoch = parseDateParam(searchParams.get("start"));
+    let endEpoch = parseDateParam(searchParams.get("end"));
+    // If end is a bare YYYY-MM-DD it parses to midnight UTC; bump to end-of-day so the day is inclusive.
+    const endRaw = searchParams.get("end");
+    if (endEpoch !== null && endRaw && /^\d{4}-\d{2}-\d{2}$/.test(endRaw)) {
+      endEpoch += 24 * 3600 - 1;
+    }
+
+    const conditions = [
+      "(message:results IS NOT NULL OR message:data:results IS NOT NULL)",
+    ];
+    if (startEpoch !== null) {
+      conditions.push(
+        `COALESCE(message:date::DOUBLE, message:data:date::DOUBLE) >= ${startEpoch}`
+      );
+    }
+    if (endEpoch !== null) {
+      conditions.push(
+        `COALESCE(message:date::DOUBLE, message:data:date::DOUBLE) <= ${endEpoch}`
+      );
+    }
+
     const rawRows = await queryDatabricks<RawRow>(`
       SELECT CAST(message AS STRING) AS m
       FROM vllm_data_warehouse.default.vllm_eval_data_ingest
-      WHERE message:results IS NOT NULL OR message:data:results IS NOT NULL
+      WHERE ${conditions.join(" AND ")}
     `);
 
     const models = new Set<string>();
