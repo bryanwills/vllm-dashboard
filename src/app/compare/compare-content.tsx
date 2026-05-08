@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { SearchableSelect } from "@/components/searchable-select";
 import { DateRangePicker } from "@/components/date-range-picker";
+import { commitFromImage } from "@/lib/commit-from-image";
 
 type Area = "perf" | "eval";
 type DeltaStatus = "regression" | "improvement" | "unchanged" | "noisy";
@@ -236,6 +237,74 @@ function StatusBadge({ status }: { status: DeltaStatus }) {
       <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[status]}`} />
       {statusLabel(status)}
     </span>
+  );
+}
+
+interface CommitMeta {
+  sha: string;
+  url: string;
+  date: string | null;
+  message: string;
+  author: string | null;
+}
+
+function formatCommitDate(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function ImageCommitInfo({ image }: { image: string }) {
+  const sha = commitFromImage(image);
+  const { data, error } = useSWR<CommitMeta>(
+    sha ? `/api/github/commit?sha=${sha}` : null,
+    fetcher,
+    { revalidateOnFocus: false }
+  );
+
+  if (!sha) return null;
+
+  if (error) {
+    return (
+      <div className="mt-2 truncate font-mono text-[11px] text-zinc-400">
+        {sha.slice(0, 7)} · commit metadata unavailable
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="mt-2 truncate font-mono text-[11px] text-zinc-400">
+        {sha.slice(0, 7)} · loading…
+      </div>
+    );
+  }
+
+  const dateLabel = formatCommitDate(data.date);
+  return (
+    <div className="mt-2 space-y-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+      <div className="flex items-center gap-2 font-mono">
+        <a
+          href={data.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-zinc-600 underline-offset-2 hover:underline dark:text-zinc-300"
+        >
+          {data.sha.slice(0, 7)}
+        </a>
+        {dateLabel && <span className="text-zinc-400">· {dateLabel}</span>}
+      </div>
+      <div className="truncate" title={data.message}>
+        {data.message}
+      </div>
+    </div>
   );
 }
 
@@ -1511,6 +1580,7 @@ export default function ComparePage() {
                 <div className="mt-1 truncate font-mono text-[11px] text-zinc-400">
                   {data.baseline}
                 </div>
+                <ImageCommitInfo image={data.baseline} />
               </div>
               <div className="grid place-items-center bg-white px-3 dark:bg-zinc-950">
                 <button
@@ -1553,6 +1623,7 @@ export default function ComparePage() {
                 <div className="mt-1 truncate font-mono text-[11px] text-zinc-400">
                   {data.candidate}
                 </div>
+                <ImageCommitInfo image={data.candidate} />
               </div>
             </div>
             <div className="mt-3 font-mono text-[11px] text-zinc-400">
