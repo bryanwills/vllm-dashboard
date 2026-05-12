@@ -312,7 +312,6 @@ export default function QueuePage() {
             </thead>
             <tbody>
               {allLatest
-                .filter((q) => q.agents_total > 0 || q.jobs_total > 0)
                 .sort((a, b) => {
                   if (sortCol === "waiting") {
                     const aw = effectiveWaiting(a.queue, a.jobs_scheduled, a.jobs_waiting);
@@ -350,7 +349,7 @@ export default function QueuePage() {
                     </td>
                   </tr>
                 ))}
-              {allLatest.filter((q) => q.agents_total > 0 || q.jobs_total > 0).length === 0 && (
+              {allLatest.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-5 py-8 text-center text-zinc-400">
                     No queue data found
