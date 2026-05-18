@@ -16,8 +16,10 @@ function getConfig() {
 export async function postMessage(
   text: string,
   threadTs?: string,
+  channelOverride?: string,
 ): Promise<SlackPostResult> {
-  const { token, channel } = getConfig();
+  const { token, channel: defaultChannel } = getConfig();
+  const channel = channelOverride ?? defaultChannel;
   const body: Record<string, string> = { channel, text };
   if (threadTs) body.thread_ts = threadTs;
 

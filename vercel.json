@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/poll-agents",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/nightly-summary",
+      "schedule": "0 16 * * *"
     }
   ]
 }
