@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { queryDatabricks } from "@/lib/databricks";
+import { getCached, setCache } from "@/lib/api-cache";
+
+const TTL = 60_000;
 
 interface BuildRow {
   id: string;
@@ -24,6 +27,10 @@ interface JobRow {
 
 export async function GET() {
   try {
+    const cacheKey = "jobs:latest-failures";
+    const cached = getCached(cacheKey);
+    if (cached) return NextResponse.json(cached);
+
     const where = [
       "b._fivetran_deleted = false",
       "b.state IN ('passed', 'failed')",
@@ -32,7 +39,6 @@ export async function GET() {
       "b.branch = 'main'",
     ].join(" AND ");
 
-    // Fetch the 2 most recent Full CI builds
     const builds = await queryDatabricks<BuildRow>(`
       SELECT
         b.id,
@@ -52,62 +58,43 @@ export async function GET() {
     `);
 
     if (builds.length === 0) {
-      return NextResponse.json({
-        build: null,
-        previousBuild: null,
-        failedJobs: [],
-        fixedJobs: [],
-      });
+      const result = { build: null, previousBuild: null, failedJobs: [], fixedJobs: [] };
+      setCache(cacheKey, result, TTL);
+      return NextResponse.json(result);
     }
 
     const build = builds[0];
     const previousBuild = builds.length > 1 ? builds[1] : null;
 
-    // Fetch failed jobs for latest build
-    const failedJobs = await queryDatabricks<JobRow>(`
-      SELECT
-        j.name,
-        j.state,
-        j.web_url,
-        j.started_at,
-        j.finished_at,
-        j.soft_failed
-      FROM vllm_data_warehouse.buildkite.build_job AS j
-      WHERE j.build_id = '${build.id.replace(/'/g, "''")}'
-        AND j._fivetran_deleted = false
-        AND j.type = 'script'
-        AND j.state IN ('failed', 'failing', 'broken', 'timed_out')
-      ORDER BY j.name
-    `);
-
-    let previousFailedNames: Set<string> = new Set();
-    let fixedJobs: JobRow[] = [];
-
-    if (previousBuild) {
-      // Fetch failed jobs from the previous build
-      const previousFailedJobs = await queryDatabricks<JobRow>(`
-        SELECT
-          j.name,
-          j.state,
-          j.web_url,
-          j.started_at,
-          j.finished_at,
-          j.soft_failed
+    const jobQueries = [
+      queryDatabricks<JobRow>(`
+        SELECT j.name, j.state, j.web_url, j.started_at, j.finished_at, j.soft_failed
         FROM vllm_data_warehouse.buildkite.build_job AS j
-        WHERE j.build_id = '${previousBuild.id.replace(/'/g, "''")}'
+        WHERE j.build_id = '${build.id.replace(/'/g, "''")}'
           AND j._fivetran_deleted = false
           AND j.type = 'script'
           AND j.state IN ('failed', 'failing', 'broken', 'timed_out')
         ORDER BY j.name
-      `);
-      previousFailedNames = new Set(previousFailedJobs.map((j) => j.name));
+      `),
+      previousBuild
+        ? queryDatabricks<JobRow>(`
+            SELECT j.name, j.state, j.web_url, j.started_at, j.finished_at, j.soft_failed
+            FROM vllm_data_warehouse.buildkite.build_job AS j
+            WHERE j.build_id = '${previousBuild.id.replace(/'/g, "''")}'
+              AND j._fivetran_deleted = false
+              AND j.type = 'script'
+              AND j.state IN ('failed', 'failing', 'broken', 'timed_out')
+            ORDER BY j.name
+          `)
+        : Promise.resolve([] as JobRow[]),
+    ];
 
-      // Fixed jobs: failed in previous build but passed (or not failed) in latest
-      const latestFailedNames = new Set(failedJobs.map((j) => j.name));
-      fixedJobs = previousFailedJobs.filter((j) => !latestFailedNames.has(j.name));
-    }
+    const [failedJobs, previousFailedJobs] = await Promise.all(jobQueries);
 
-    // Tag each failed job as "new" or "recurring"
+    const previousFailedNames = new Set(previousFailedJobs.map((j) => j.name));
+    const latestFailedNames = new Set(failedJobs.map((j) => j.name));
+    const fixedJobs = previousFailedJobs.filter((j) => !latestFailedNames.has(j.name));
+
     const taggedFailedJobs = failedJobs.map((job) => ({
       ...job,
       category: previousBuild
@@ -117,12 +104,10 @@ export async function GET() {
         : "unknown",
     }));
 
-    return NextResponse.json({
-      build,
-      previousBuild,
-      failedJobs: taggedFailedJobs,
-      fixedJobs,
-    });
+    const result = { build, previousBuild, failedJobs: taggedFailedJobs, fixedJobs };
+    setCache(cacheKey, result, TTL);
+
+    return NextResponse.json(result);
   } catch (error) {
     console.error("Failed to fetch latest build failures:", error);
     return NextResponse.json(

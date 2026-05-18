@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDatabricks } from "@/lib/databricks";
+import { getCached, setCache } from "@/lib/api-cache";
 
-const cache = new Map<string, { data: unknown; expiry: number }>();
-const CACHE_TTL_MS = 60_000;
+const TTL = 60_000;
 
 export async function GET(request: NextRequest) {
   const queue = request.nextUrl.searchParams.get("queue");
@@ -10,10 +10,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "queue parameter required" }, { status: 400 });
   }
 
-  const cached = cache.get(queue);
-  if (cached && Date.now() < cached.expiry) {
-    return NextResponse.json(cached.data);
-  }
+  const cacheKey = `waiting-builds:${queue}`;
+  const cached = getCached(cacheKey);
+  if (cached) return NextResponse.json(cached);
 
   try {
     const rows = await queryDatabricks(`
@@ -55,7 +54,7 @@ export async function GET(request: NextRequest) {
     `);
 
     const result = { builds: rows };
-    cache.set(queue, { data: result, expiry: Date.now() + CACHE_TTL_MS });
+    setCache(cacheKey, result, TTL);
 
     return NextResponse.json(result);
   } catch (error) {

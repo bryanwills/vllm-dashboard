@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { getCached, setCache } from "@/lib/api-cache";
 
-const cache = new Map<string, { data: unknown; expiry: number }>();
-const CACHE_TTL_MS = 15_000;
+const TTL = 15_000;
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,15 +13,11 @@ export async function GET(request: NextRequest) {
       720,
     );
     const queue = searchParams.get("queue") || null;
+    const cacheKey = `metrics:${hours}:${queue ?? "all"}`;
+    const cached = getCached(cacheKey);
+    if (cached) return NextResponse.json(cached);
+
     const cutoff = new Date(Date.now() - hours * 3600 * 1000);
-
-    const cacheKey = `${hours}:${queue ?? "all"}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() < cached.expiry) {
-      return NextResponse.json(cached.data);
-    }
-
-    // Only need recent data to find the latest row per queue
     const latestCutoff = new Date(Date.now() - 2 * 3600 * 1000);
 
     let snapshotsQuery;
@@ -123,7 +119,7 @@ export async function GET(request: NextRequest) {
       queues: queueRows.map((r) => r.queue),
       latest,
     };
-    cache.set(cacheKey, { data: result, expiry: Date.now() + CACHE_TTL_MS });
+    setCache(cacheKey, result, TTL);
 
     return NextResponse.json(result);
   } catch (error) {
