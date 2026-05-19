@@ -169,7 +169,8 @@ export async function loadEvalRows({
       const taskResults = core.results[taskName];
       const hib = core.higher_is_better?.[taskName] ?? {};
       const metrics = parseEvalMetrics(taskResults, hib);
-      const epoch = core.date ?? 0;
+      const ingestEpoch = r.ingest_ts ? Math.floor(new Date(r.ingest_ts).getTime() / 1000) : 0;
+      const epoch = core.date || ingestEpoch;
       const workload = raw.workload ?? workloadFromSourceFile(raw.source_file);
       const row: EvalRow = {
         ingest_ts: r.ingest_ts,

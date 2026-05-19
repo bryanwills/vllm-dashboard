@@ -558,6 +558,8 @@ function SamplesDrawer({
   );
 }
 
+const PAGE_SIZE = 50;
+
 function LeaderboardTable({
   rows,
   onSelect,
@@ -565,9 +567,14 @@ function LeaderboardTable({
   rows: EvalRow[];
   onSelect: (row: EvalRow) => void;
 }) {
+  const [page, setPage] = useState(0);
+
   const allRuns = useMemo(() => {
     return [...rows].sort((a, b) => b.run_epoch - a.run_epoch);
   }, [rows]);
+
+  const totalPages = Math.ceil(allRuns.length / PAGE_SIZE);
+  const pageRows = allRuns.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   if (allRuns.length === 0) return null;
 
@@ -596,7 +603,7 @@ function LeaderboardTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {allRuns.map((r) => {
+            {pageRows.map((r) => {
               const m = r.metrics[0] ?? null;
               const clickable = !!r.buildkite_build_id;
               return (
@@ -633,7 +640,7 @@ function LeaderboardTable({
                       {r.image ?? "—"}
                     </span>
                   </td>
-                  <td className="px-4 py-2 font-mono text-xs">{r.model}</td>
+                  <td className="px-4 py-2 font-mono text-xs">{r.model || "—"}</td>
                   <td className="px-4 py-2">{r.task}</td>
                   <td className="px-4 py-2 text-right font-medium" title={m ? `${m.name} (${m.filter})` : undefined}>
                     {m ? formatPct(m.value) : "—"}
@@ -652,6 +659,31 @@ function LeaderboardTable({
           </tbody>
         </table>
       </div>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between border-t border-zinc-200 px-5 py-3 dark:border-zinc-800">
+          <span className="text-xs text-zinc-400">
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, allRuns.length)} of {allRuns.length}
+          </span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              disabled={page === 0}
+              onClick={() => setPage(page - 1)}
+              className="rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              disabled={page >= totalPages - 1}
+              onClick={() => setPage(page + 1)}
+              className="rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -813,17 +845,21 @@ export default function EvalPage() {
 
       {!isLoading && rows.length > 0 && (
         <>
-          <LatestStatCards rows={rows} />
+          {model && (
+            <>
+              <LatestStatCards rows={rows} />
 
-          <div className="grid grid-cols-1 gap-5">
-            {tasksInData.map((t) => (
-              <ScoreChart
-                key={t}
-                rows={rows.filter((r) => r.task === t)}
-                task={t}
-              />
-            ))}
-          </div>
+              <div className="grid grid-cols-1 gap-5">
+                {tasksInData.map((t) => (
+                  <ScoreChart
+                    key={t}
+                    rows={rows.filter((r) => r.task === t)}
+                    task={t}
+                  />
+                ))}
+              </div>
+            </>
+          )}
 
           <LeaderboardTable
             rows={rows}
