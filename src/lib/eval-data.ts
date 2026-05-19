@@ -121,6 +121,18 @@ export function parseEvalMetrics(
   return out;
 }
 
+function extractModel(modelArgs: unknown): string | null {
+  if (!modelArgs) return null;
+  if (typeof modelArgs === "object" && modelArgs !== null && "model" in modelArgs) {
+    return (modelArgs as Record<string, unknown>).model as string;
+  }
+  if (typeof modelArgs === "string") {
+    const m = modelArgs.match(/(?:^|,)model=([^,]+)/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 export async function loadEvalRows({
   model,
   task,
@@ -176,7 +188,7 @@ export async function loadEvalRows({
         ingest_ts: r.ingest_ts,
         run_epoch: epoch,
         run_date: new Date(epoch * 1000).toISOString(),
-        model: (core.config?.model_args?.model as string) ?? "",
+        model: extractModel(core.config?.model_args) ?? "",
         task: taskName,
         n_shot: core["n-shot"]?.[taskName] ?? 0,
         n_samples: core["n-samples"]?.[taskName]?.effective ?? 0,
