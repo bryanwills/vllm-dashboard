@@ -53,6 +53,8 @@ export default function BuildsPage() {
   if (startDate) params.set("startDate", startDate);
   if (endDate) params.set("endDate", endDate);
   params.set("page", String(page));
+  if (selectedGroups.size > 0) params.set("jobGroups", [...selectedGroups].join(","));
+  if (selectedJobs.size > 0) params.set("jobNames", [...selectedJobs].join(","));
   const queryString = params.toString();
   const apiUrl = `/api/builds?${queryString}`;
 
@@ -164,6 +166,7 @@ export default function BuildsPage() {
             selected={selectedGroups}
             onChange={(v) => {
               setSelectedGroups(v);
+              setPage(0);
               setSelectedJobs((prev) => {
                 if (v.size === 0) return prev;
                 const valid = new Set<string>();
@@ -184,7 +187,7 @@ export default function BuildsPage() {
           <MultiSelect
             label="Jobs"
             selected={selectedJobs}
-            onChange={setSelectedJobs}
+            onChange={(v) => { setSelectedJobs(v); setPage(0); }}
             options={availableJobNames}
             placeholder="All Jobs"
           />
