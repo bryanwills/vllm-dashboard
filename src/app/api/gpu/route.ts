@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
         hostname, gpu_index, gpu_name, gpu_util, mem_used_mb, mem_total_mb,
         temperature_c, power_draw_w, power_limit_w, reported_at
       FROM gpu_snapshots
-      WHERE reported_at > NOW() - INTERVAL '10 minutes'
+      WHERE reported_at > NOW() - INTERVAL '1 hour' * ${hours}
       ORDER BY hostname, gpu_index, reported_at DESC
     `;
 
