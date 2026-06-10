@@ -44,6 +44,12 @@ function formatMemory(mb: number): string {
   return `${Math.round(mb)} MB`;
 }
 
+function formatAgo(minutes: number): string {
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)}h ago`;
+  return `${Math.round(minutes / 1440)}d ago`;
+}
+
 function gpuType(name: string | null): string {
   if (!name) return "Unknown";
   const match = name.match(/\b(A100|H100|H200|B200|B100|L40S?|A10G?|T4|V100|GB200|GB300)\b/i);
@@ -254,13 +260,21 @@ export default function GpuPage() {
               {hostRows.map((h) => {
                 const memPct = h.memTotalMb > 0 ? Math.round((h.memUsedMb / h.memTotalMb) * 100) : 0;
                 const ago = Math.round((Date.now() - new Date(h.lastSeen).getTime()) / 60_000);
+                const offline = ago > 10;
                 const stale = ago > 5;
                 return (
                   <tr
                     key={h.hostname}
                     className={`border-b border-zinc-100 last:border-0 dark:border-zinc-800/50 ${stale ? "opacity-50" : ""}`}
                   >
-                    <td className="px-5 py-2.5 font-medium">{h.hostname}</td>
+                    <td className="px-5 py-2.5 font-medium">
+                      {h.hostname}
+                      {offline && (
+                        <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-400">
+                          Offline
+                        </span>
+                      )}
+                    </td>
                     <td className="px-5 py-2.5">{h.gpuType}</td>
                     <td className="px-5 py-2.5">
                       <span className={memPct > 90 ? "font-medium text-red-600 dark:text-red-400" : ""}>
@@ -303,8 +317,16 @@ export default function GpuPage() {
                         })}
                       </div>
                     </td>
-                    <td className={`whitespace-nowrap px-5 py-2.5 text-zinc-500 dark:text-zinc-400 ${stale ? "text-yellow-600 dark:text-yellow-400" : ""}`}>
-                      {stale ? `${ago}m ago` : "just now"}
+                    <td
+                      className={`whitespace-nowrap px-5 py-2.5 ${
+                        offline
+                          ? "text-red-600 dark:text-red-400"
+                          : stale
+                          ? "text-yellow-600 dark:text-yellow-400"
+                          : "text-zinc-500 dark:text-zinc-400"
+                      }`}
+                    >
+                      {stale ? formatAgo(ago) : "just now"}
                     </td>
                   </tr>
                 );
