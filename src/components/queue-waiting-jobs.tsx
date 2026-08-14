@@ -3,7 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 
-interface QueueJob {
+export interface QueueJob {
   uuid: string;
   label: string | null;
   url: string;
@@ -11,7 +11,7 @@ interface QueueJob {
   priority: number;
 }
 
-interface QueueJobsResponse {
+export interface QueueJobsResponse {
   jobs: QueueJob[];
   operatorAccessRequired: boolean;
 }
@@ -39,18 +39,27 @@ function formatScheduledAt(value: string): string {
   });
 }
 
-export function QueueWaitingJobs({ queue }: { queue: string }) {
+export function useQueueWaitingJobs(queue: string) {
+  const url = queue ? `/api/queue/jobs?queue=${encodeURIComponent(queue)}` : null;
+  return useSWR<QueueJobsResponse>(url, fetchJson, {
+    refreshInterval: 30_000,
+    keepPreviousData: true,
+  });
+}
+
+export function QueueWaitingJobs({
+  queue,
+  query,
+}: {
+  queue: string;
+  query: ReturnType<typeof useQueueWaitingJobs>;
+}) {
   const [operatorToken, setOperatorToken] = useState("");
   const [showAccess, setShowAccess] = useState(false);
   const [pendingJobUuid, setPendingJobUuid] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const url = queue ? `/api/queue/jobs?queue=${encodeURIComponent(queue)}` : null;
-  const { data, error, isLoading, isValidating, mutate } = useSWR<QueueJobsResponse>(
-    url,
-    fetchJson,
-    { refreshInterval: 30_000, keepPreviousData: true },
-  );
+  const { data, error, isLoading, isValidating, mutate } = query;
 
   async function promote(job: QueueJob) {
     if (!operatorToken) {
