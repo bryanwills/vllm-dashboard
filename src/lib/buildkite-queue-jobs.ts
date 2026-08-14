@@ -81,6 +81,22 @@ interface ClusterQueuePageGraphQLResponse {
   errors?: Array<{ message: string }>;
 }
 
+interface ClusterQueueMetricGraphQLResponse {
+  data?: {
+    node?: {
+      metrics?: {
+        waitingJobsCount?: number;
+      } | null;
+    } | null;
+  };
+  errors?: Array<{ message: string }>;
+}
+
+export interface QueueJobsResult {
+  jobs: QueueJob[];
+  waitingCount: number | null;
+}
+
 export class BuildkiteQueueError extends Error {
   constructor(
     message: string,
@@ -290,6 +306,50 @@ async function getClusterQueue(queue: string): Promise<ClusterQueueTarget | null
   return null;
 }
 
+async function getClusterQueueWaitingCount(queue: string): Promise<number | null> {
+  const token = getToken();
+  const clusterQueue = await getClusterQueue(queue);
+  if (!clusterQueue) return null;
+
+  const response = await fetch(GRAPHQL_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query: `
+        query ClusterQueueMetric($queue: ID!) {
+          node(id: $queue) {
+            ... on ClusterQueue {
+              metrics {
+                waitingJobsCount
+              }
+            }
+          }
+        }
+      `,
+      variables: { queue: clusterQueue.queueId },
+    }),
+    cache: "no-store",
+  });
+
+  let result: ClusterQueueMetricGraphQLResponse;
+  try {
+    result = (await response.json()) as ClusterQueueMetricGraphQLResponse;
+  } catch {
+    throw new BuildkiteQueueError(
+      "Buildkite returned an invalid cluster-queue metric response.",
+      502,
+      "BUILDKITE_INVALID_RESPONSE",
+    );
+  }
+
+  if (!response.ok || result.errors?.length) throw requestError(response, result.errors);
+  return result.data?.node?.metrics?.waitingJobsCount ?? null;
+}
+
 async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
   const token = getToken();
   const agentQueryRule = queueRule(queue);
@@ -393,8 +453,12 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
   });
 }
 
-export async function getQueueJobs(queue: string): Promise<QueueJob[]> {
-  return graphqlQueueJobs(queue);
+export async function getQueueJobs(queue: string): Promise<QueueJobsResult> {
+  const [jobs, waitingCount] = await Promise.all([
+    graphqlQueueJobs(queue),
+    getClusterQueueWaitingCount(queue),
+  ]);
+  return { jobs, waitingCount };
 }
 
 export async function reprioritizeQueueJob(queue: string, jobUuid: string): Promise<{ priority: number }> {

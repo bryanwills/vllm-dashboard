@@ -22,9 +22,13 @@ export async function GET(request: NextRequest) {
   const queue = request.nextUrl.searchParams.get("queue") ?? "";
 
   try {
-    const jobs = await getQueueJobs(queue);
+    const { jobs, waitingCount } = await getQueueJobs(queue);
     return NextResponse.json(
-      { jobs, operatorAccessRequired: Boolean(process.env.BUILDKITE_QUEUE_OPERATOR_TOKEN) },
+      {
+        jobs,
+        waitingCount,
+        operatorAccessRequired: Boolean(process.env.BUILDKITE_QUEUE_OPERATOR_TOKEN),
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

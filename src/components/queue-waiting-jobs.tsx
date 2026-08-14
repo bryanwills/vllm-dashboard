@@ -13,6 +13,7 @@ export interface QueueJob {
 
 export interface QueueJobsResponse {
   jobs: QueueJob[];
+  waitingCount: number | null;
   operatorAccessRequired: boolean;
 }
 
@@ -101,6 +102,8 @@ export function QueueWaitingJobs({
 
   const canPromote = Boolean(data?.operatorAccessRequired && operatorToken);
   const showTable = Boolean(data && (data.jobs.length > 0 || isValidating || error));
+  const reportedWaitingCount = data?.waitingCount ?? data?.jobs.length;
+  const hasReservedJobs = Boolean(data && data.waitingCount !== null && data.waitingCount > data.jobs.length);
 
   return (
     <section className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
@@ -111,7 +114,7 @@ export function QueueWaitingJobs({
               <h2 className="text-base font-semibold tracking-tight">Waiting jobs</h2>
               {data && (
                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
-                  {data.jobs.length}
+                  {reportedWaitingCount}
                 </span>
               )}
             </div>
@@ -144,7 +147,7 @@ export function QueueWaitingJobs({
           </div>
         </div>
 
-        {data?.operatorAccessRequired ? (
+        {data?.operatorAccessRequired && data.jobs.length > 0 ? (
           <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-800/80">
             <button
               type="button"
@@ -167,7 +170,7 @@ export function QueueWaitingJobs({
               </label>
             )}
           </div>
-        ) : data ? (
+        ) : data && !hasReservedJobs ? (
           <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
             Promotion is disabled until BUILDKITE_QUEUE_OPERATOR_TOKEN is configured on the dashboard.
           </p>
@@ -201,7 +204,9 @@ export function QueueWaitingJobs({
 
       {data && data.jobs.length === 0 && !isValidating && !error && (
         <div className="flex min-h-36 items-center justify-center px-5 text-center text-sm text-zinc-500 dark:text-zinc-400">
-          No command jobs are waiting in {queue}.
+          {hasReservedJobs
+            ? `Buildkite reports ${reportedWaitingCount} waiting jobs in ${queue}, but its Agent Stack has reserved them. The public API does not expose their individual details or priority.`
+            : `No command jobs are waiting in ${queue}.`}
         </div>
       )}
 
