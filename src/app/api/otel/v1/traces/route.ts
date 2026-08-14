@@ -1,6 +1,10 @@
 import { gunzipSync } from "node:zlib";
 import { NextRequest, NextResponse } from "next/server";
-import { isOtlpAuthorized, isOtlpConfigured } from "@/lib/otel-auth";
+import {
+  authorizeOtlpRequest,
+  isOtlpConfigured,
+  spansMatchPrincipal,
+} from "@/lib/otel-auth";
 import { decodeOtlpTraceRequest } from "@/lib/otel-proto";
 import { storeOtlpSpans } from "@/lib/otel-storage";
 
@@ -29,7 +33,8 @@ export async function POST(request: NextRequest) {
       { status: 503 },
     );
   }
-  if (!isOtlpAuthorized(request.headers)) {
+  const principal = await authorizeOtlpRequest(request.headers);
+  if (!principal) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -65,6 +70,12 @@ export async function POST(request: NextRequest) {
     }
 
     spans = decodeOtlpTraceRequest(payload);
+    if (!spansMatchPrincipal(spans, principal)) {
+      return NextResponse.json(
+        { error: "Span identity does not match OIDC claims" },
+        { status: 403 },
+      );
+    }
   } catch (error) {
     console.error("Invalid OTLP trace request:", error);
     return NextResponse.json(
