@@ -33,6 +33,32 @@ interface GraphQLResponse {
   errors?: Array<{ message: string }>;
 }
 
+interface ClusterQueuesGraphQLResponse {
+  data?: {
+    organization?: {
+      clusters: {
+        pageInfo: {
+          hasNextPage: boolean;
+          endCursor: string | null;
+        };
+        edges: Array<{
+          node: {
+            queues: {
+              edges: Array<{
+                node: {
+                  id: string;
+                  key: string;
+                };
+              }>;
+            };
+          };
+        }>;
+      };
+    } | null;
+  };
+  errors?: Array<{ message: string }>;
+}
+
 export class BuildkiteQueueError extends Error {
   constructor(
     message: string,
@@ -66,8 +92,104 @@ function queueRule(queue: string): string {
   return `queue=${queue}`;
 }
 
+function requestError(response: Response, errors?: Array<{ message: string }>): BuildkiteQueueError {
+  const detail = errors?.map((error) => error.message).join(" ");
+  const message =
+    response.status === 401
+      ? "The configured Buildkite API token is no longer valid."
+      : response.status === 403 || response.status === 404
+        ? "The Buildkite token needs GraphQL API access and read access to this organization."
+        : detail || "Buildkite could not load the queue jobs.";
+  return new BuildkiteQueueError(
+    message,
+    response.status >= 500 ? 502 : response.status || 502,
+    "BUILDKITE_REQUEST_FAILED",
+  );
+}
+
+async function getClusterQueueId(queue: string): Promise<string | null> {
+  const token = getToken();
+  let after: string | null = null;
+
+  do {
+    const response = await fetch(GRAPHQL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: `
+          query ClusterQueues($organization: ID!, $first: Int!, $after: String) {
+            organization(slug: $organization) {
+              clusters(first: $first, after: $after) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
+                    queues(first: $first) {
+                      edges {
+                        node {
+                          id
+                          key
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `,
+        variables: {
+          organization: organization(),
+          first: JOBS_PAGE_SIZE,
+          after,
+        },
+      }),
+      cache: "no-store",
+    });
+
+    let result: ClusterQueuesGraphQLResponse;
+    try {
+      result = (await response.json()) as ClusterQueuesGraphQLResponse;
+    } catch {
+      throw new BuildkiteQueueError(
+        "Buildkite returned an invalid cluster-queues response.",
+        502,
+        "BUILDKITE_INVALID_RESPONSE",
+      );
+    }
+
+    if (!response.ok || result.errors?.length) throw requestError(response, result.errors);
+
+    const clusters = result.data?.organization?.clusters;
+    if (!clusters) {
+      throw new BuildkiteQueueError(
+        "Buildkite did not return clusters for the configured organization.",
+        502,
+        "BUILDKITE_INVALID_RESPONSE",
+      );
+    }
+
+    for (const { node: cluster } of clusters.edges) {
+      const clusterQueue = cluster.queues.edges.find(({ node }) => node.key === queue)?.node;
+      if (clusterQueue) return clusterQueue.id;
+    }
+
+    after = clusters.pageInfo.hasNextPage ? clusters.pageInfo.endCursor : null;
+  } while (after);
+
+  return null;
+}
+
 async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
   const token = getToken();
+  const agentQueryRule = queueRule(queue);
+  const clusterQueueId = await getClusterQueueId(queue);
   const jobs: QueueJob[] = [];
   let after: string | null = null;
 
@@ -81,14 +203,15 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
       },
       body: JSON.stringify({
         query: `
-          query QueueJobs($organization: ID!, $agentQueryRules: [String!], $first: Int!, $after: String) {
+          query QueueJobs($organization: ID!, $agentQueryRules: [String!], $clusterQueue: [ID!], $first: Int!, $after: String) {
             organization(slug: $organization) {
               jobs(
                 first: $first
                 after: $after
-                type: COMMAND
-                state: SCHEDULED
+                type: [COMMAND]
+                state: [SCHEDULED]
                 agentQueryRules: $agentQueryRules
+                clusterQueue: $clusterQueue
               ) {
                 pageInfo {
                   hasNextPage
@@ -111,7 +234,8 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
         `,
         variables: {
           organization: organization(),
-          agentQueryRules: [queueRule(queue)],
+          agentQueryRules: clusterQueueId ? null : [agentQueryRule],
+          clusterQueue: clusterQueueId ? [clusterQueueId] : null,
           first: JOBS_PAGE_SIZE,
           after,
         },
@@ -130,20 +254,7 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
       );
     }
 
-    if (!response.ok || result.errors?.length) {
-      const detail = result.errors?.map((error) => error.message).join(" ");
-      const message =
-        response.status === 401
-          ? "The configured Buildkite API token is no longer valid."
-          : response.status === 403 || response.status === 404
-            ? "The Buildkite token needs GraphQL API access and read access to this organization."
-            : detail || "Buildkite could not load the queue jobs.";
-      throw new BuildkiteQueueError(
-        message,
-        response.status >= 500 ? 502 : response.status || 502,
-        "BUILDKITE_REQUEST_FAILED",
-      );
-    }
+    if (!response.ok || result.errors?.length) throw requestError(response, result.errors);
 
     const connection = result.data?.organization?.jobs;
     if (!connection) {
