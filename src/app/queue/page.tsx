@@ -185,14 +185,18 @@ export default function QueuePage() {
   const busyAgents = filtered.reduce((s, q) => s + q.agents_busy, 0);
   const idleAgents = filtered.reduce((s, q) => s + q.agents_idle, 0);
   const runningJobs = filtered.reduce((s, q) => s + q.jobs_running, 0);
-  const liveWaitingJobs = queueJobsQuery.data?.jobs.length;
+  const liveWaitingJobs = queueJobsQuery.data
+    ? (queueJobsQuery.data.waitingCount ?? queueJobsQuery.data.jobs.length)
+    : undefined;
   const liveWaitingJobsDetail = !queue
     ? "Select a queue"
     : queueJobsQuery.error
       ? "Live count unavailable"
       : liveWaitingJobs === undefined
         ? "Loading live queue"
-        : "Live command jobs";
+        : queueJobsQuery.data?.waitingCount != null
+          ? "Buildkite queue metric"
+          : "Live command jobs";
 
   return (
     <div className="space-y-6">
