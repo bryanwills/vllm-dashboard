@@ -105,6 +105,12 @@ export default function QueuePage() {
     keepPreviousData: true,
   });
   const queueJobsQuery = useQueueWaitingJobs(queue);
+  // The Buildkite queue metric is the source of truth for the current
+  // waiting count. Individual job details may be unavailable when an Agent
+  // Stack has already reserved those jobs, but the metric remains available.
+  const liveWaitingJobs = queueJobsQuery.data
+    ? (queueJobsQuery.data.waitingCount ?? queueJobsQuery.data.jobs.length)
+    : undefined;
 
   const historyMatchesQueue = metricsData?.query.queue === (queue || null);
   const historyMatchesSelection =
@@ -123,7 +129,6 @@ export default function QueuePage() {
   const overviewChartData = useMemo(() => {
     if (!historyMatchesQueue) return [];
     const snapshots = metricsData?.snapshots ?? [];
-    if (snapshots.length === 0) return [];
 
     const bucketMap = new Map<number, { running: number; scheduled: number; waiting: number; agents: number }>();
     for (const row of snapshots) {
@@ -137,10 +142,36 @@ export default function QueuePage() {
       entry.agents += row.agents_total;
     }
 
-    return [...bucketMap.entries()]
+    const chartData = [...bucketMap.entries()]
       .map(([time, v]) => ({ time, ...v }))
       .sort((a, b) => a.time - b.time);
-  }, [historyMatchesQueue, metricsData, queue]);
+
+    // Agent Metrics records the controller's view of pending work, which can
+    // be zero after an Agent Stack reserves jobs. Add a current point from the
+    // Buildkite queue metric so the chart's latest Waiting value matches the
+    // live count shown above without rewriting historical snapshots.
+    if (queue && liveWaitingJobs !== undefined) {
+      const latest = chartData[chartData.length - 1];
+      const currentSnapshot = metricsData?.latest.find((metric) => metric.queue === queue);
+      const livePointTime = latest
+        ? latest.time + 60_000
+        : currentSnapshot
+          ? Date.parse(currentSnapshot.polled_at)
+          : undefined;
+
+      if (livePointTime !== undefined && Number.isFinite(livePointTime)) {
+        chartData.push({
+          time: livePointTime,
+          running: latest?.running ?? currentSnapshot?.jobs_running ?? 0,
+          scheduled: liveWaitingJobs,
+          waiting: latest?.waiting ?? currentSnapshot?.jobs_waiting ?? 0,
+          agents: latest?.agents ?? currentSnapshot?.agents_total ?? 0,
+        });
+      }
+    }
+
+    return chartData;
+  }, [historyMatchesQueue, liveWaitingJobs, metricsData, queue]);
 
   const chartTickInterval = Math.max(1, Math.floor(overviewChartData.length / 10));
 
@@ -185,9 +216,6 @@ export default function QueuePage() {
   const busyAgents = filtered.reduce((s, q) => s + q.agents_busy, 0);
   const idleAgents = filtered.reduce((s, q) => s + q.agents_idle, 0);
   const runningJobs = filtered.reduce((s, q) => s + q.jobs_running, 0);
-  const liveWaitingJobs = queueJobsQuery.data
-    ? (queueJobsQuery.data.waitingCount ?? queueJobsQuery.data.jobs.length)
-    : undefined;
   const liveWaitingJobsDetail = !queue
     ? "Select a queue"
     : queueJobsQuery.error
