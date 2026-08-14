@@ -25,6 +25,7 @@ interface GraphQLResponse {
             url?: string;
             scheduledAt?: string;
             priority?: { number?: number };
+            clusterQueue?: { id?: string } | null;
           };
         }>;
       };
@@ -44,6 +45,11 @@ interface ClusterQueueConnection {
       key: string;
     };
   }>;
+}
+
+interface ClusterQueueTarget {
+  clusterId: string;
+  queueId: string;
 }
 
 interface ClusterQueuesGraphQLResponse {
@@ -190,7 +196,7 @@ async function getClusterQueuePage(
   return queues;
 }
 
-async function getClusterQueueId(queue: string): Promise<string | null> {
+async function getClusterQueue(queue: string): Promise<ClusterQueueTarget | null> {
   const token = getToken();
   let after: string | null = null;
 
@@ -265,7 +271,7 @@ async function getClusterQueueId(queue: string): Promise<string | null> {
 
     for (const { node: cluster } of clusters.edges) {
       const clusterQueue = cluster.queues.edges.find(({ node }) => node.key === queue)?.node;
-      if (clusterQueue) return clusterQueue.id;
+      if (clusterQueue) return { clusterId: cluster.id, queueId: clusterQueue.id };
 
       let queueAfter = cluster.queues.pageInfo.hasNextPage
         ? cluster.queues.pageInfo.endCursor
@@ -273,7 +279,7 @@ async function getClusterQueueId(queue: string): Promise<string | null> {
       while (queueAfter) {
         const queues = await getClusterQueuePage(token, cluster.id, queueAfter);
         const paginatedQueue = queues.edges.find(({ node }) => node.key === queue)?.node;
-        if (paginatedQueue) return paginatedQueue.id;
+        if (paginatedQueue) return { clusterId: cluster.id, queueId: paginatedQueue.id };
         queueAfter = queues.pageInfo.hasNextPage ? queues.pageInfo.endCursor : null;
       }
     }
@@ -287,7 +293,7 @@ async function getClusterQueueId(queue: string): Promise<string | null> {
 async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
   const token = getToken();
   const agentQueryRule = queueRule(queue);
-  const clusterQueueId = await getClusterQueueId(queue);
+  const clusterQueue = await getClusterQueue(queue);
   const jobs: QueueJob[] = [];
   let after: string | null = null;
 
@@ -301,7 +307,7 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
       },
       body: JSON.stringify({
         query: `
-          query QueueJobs($organization: ID!, $agentQueryRules: [String!], $clusterQueue: [ID!], $first: Int!, $after: String) {
+          query QueueJobs($organization: ID!, $agentQueryRules: [String!], $cluster: ID, $first: Int!, $after: String) {
             organization(slug: $organization) {
               jobs(
                 first: $first
@@ -309,7 +315,7 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
                 type: [COMMAND]
                 state: [SCHEDULED]
                 agentQueryRules: $agentQueryRules
-                clusterQueue: $clusterQueue
+                cluster: $cluster
               ) {
                 pageInfo {
                   hasNextPage
@@ -323,6 +329,7 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
                       url
                       scheduledAt
                       priority { number }
+                      clusterQueue { id }
                     }
                   }
                 }
@@ -332,8 +339,8 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
         `,
         variables: {
           organization: organization(),
-          agentQueryRules: clusterQueueId ? null : [agentQueryRule],
-          clusterQueue: clusterQueueId ? [clusterQueueId] : null,
+          agentQueryRules: clusterQueue ? null : [agentQueryRule],
+          cluster: clusterQueue?.clusterId ?? null,
           first: JOBS_PAGE_SIZE,
           after,
         },
@@ -365,6 +372,7 @@ async function graphqlQueueJobs(queue: string): Promise<QueueJob[]> {
 
     for (const { node } of connection.edges) {
       if (!node.uuid || !node.url || !node.scheduledAt) continue;
+      if (clusterQueue && node.clusterQueue?.id !== clusterQueue.queueId) continue;
       jobs.push({
         uuid: node.uuid,
         label: node.label ?? null,
