@@ -33,6 +33,19 @@ interface GraphQLResponse {
   errors?: Array<{ message: string }>;
 }
 
+interface ClusterQueueConnection {
+  pageInfo: {
+    hasNextPage: boolean;
+    endCursor: string | null;
+  };
+  edges: Array<{
+    node: {
+      id: string;
+      key: string;
+    };
+  }>;
+}
+
 interface ClusterQueuesGraphQLResponse {
   data?: {
     organization?: {
@@ -43,17 +56,20 @@ interface ClusterQueuesGraphQLResponse {
         };
         edges: Array<{
           node: {
-            queues: {
-              edges: Array<{
-                node: {
-                  id: string;
-                  key: string;
-                };
-              }>;
-            };
+            id: string;
+            queues: ClusterQueueConnection;
           };
         }>;
       };
+    } | null;
+  };
+  errors?: Array<{ message: string }>;
+}
+
+interface ClusterQueuePageGraphQLResponse {
+  data?: {
+    node?: {
+      queues: ClusterQueueConnection;
     } | null;
   };
   errors?: Array<{ message: string }>;
@@ -107,6 +123,73 @@ function requestError(response: Response, errors?: Array<{ message: string }>): 
   );
 }
 
+async function getClusterQueuePage(
+  token: string,
+  clusterId: string,
+  after: string,
+): Promise<ClusterQueueConnection> {
+  const response = await fetch(GRAPHQL_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query: `
+        query ClusterQueuePage($cluster: ID!, $first: Int!, $after: String) {
+          node(id: $cluster) {
+            ... on Cluster {
+              queues(first: $first, after: $after) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
+                    id
+                    key
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      variables: {
+        cluster: clusterId,
+        first: JOBS_PAGE_SIZE,
+        after,
+      },
+    }),
+    cache: "no-store",
+  });
+
+  let result: ClusterQueuePageGraphQLResponse;
+  try {
+    result = (await response.json()) as ClusterQueuePageGraphQLResponse;
+  } catch {
+    throw new BuildkiteQueueError(
+      "Buildkite returned an invalid cluster-queue response.",
+      502,
+      "BUILDKITE_INVALID_RESPONSE",
+    );
+  }
+
+  if (!response.ok || result.errors?.length) throw requestError(response, result.errors);
+
+  const queues = result.data?.node?.queues;
+  if (!queues) {
+    throw new BuildkiteQueueError(
+      "Buildkite did not return queues for a cluster.",
+      502,
+      "BUILDKITE_INVALID_RESPONSE",
+    );
+  }
+
+  return queues;
+}
+
 async function getClusterQueueId(queue: string): Promise<string | null> {
   const token = getToken();
   let after: string | null = null;
@@ -130,7 +213,12 @@ async function getClusterQueueId(queue: string): Promise<string | null> {
                 }
                 edges {
                   node {
+                    id
                     queues(first: $first) {
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
                       edges {
                         node {
                           id
@@ -178,6 +266,16 @@ async function getClusterQueueId(queue: string): Promise<string | null> {
     for (const { node: cluster } of clusters.edges) {
       const clusterQueue = cluster.queues.edges.find(({ node }) => node.key === queue)?.node;
       if (clusterQueue) return clusterQueue.id;
+
+      let queueAfter = cluster.queues.pageInfo.hasNextPage
+        ? cluster.queues.pageInfo.endCursor
+        : null;
+      while (queueAfter) {
+        const queues = await getClusterQueuePage(token, cluster.id, queueAfter);
+        const paginatedQueue = queues.edges.find(({ node }) => node.key === queue)?.node;
+        if (paginatedQueue) return paginatedQueue.id;
+        queueAfter = queues.pageInfo.hasNextPage ? queues.pageInfo.endCursor : null;
+      }
     }
 
     after = clusters.pageInfo.hasNextPage ? clusters.pageInfo.endCursor : null;
