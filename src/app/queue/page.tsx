@@ -114,21 +114,6 @@ export default function QueuePage() {
   const chartRequestPending =
     !historyMatchesSelection && (isLoading || isValidating || Boolean(metricsData));
 
-  interface WaitingBuild {
-    build_number: string;
-    build_url: string;
-    message: string;
-    author: string;
-    waiting_jobs: string;
-    total_jobs: string;
-    max_wait_min: string;
-  }
-  const { data: waitingBuildsData } = useSWR<{ builds: WaitingBuild[] }>(
-    queue ? `/api/metrics/waiting-builds?queue=${encodeURIComponent(queue)}` : null,
-    fetchJson,
-    { refreshInterval: 60 * 1000 },
-  );
-
   const metricsQueuesForFilter = metricsData?.queues ?? [];
 
   // Aggregate snapshots into chart data: sum running/scheduled/agents per time bucket.
@@ -263,8 +248,6 @@ export default function QueuePage() {
         })()}
       </div>
 
-      {queue && <QueueWaitingJobs queue={queue} />}
-
       {/* Queue Overview Chart */}
       <div className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
         <div className="mb-4 flex min-h-6 flex-wrap items-center justify-between gap-2">
@@ -331,57 +314,7 @@ export default function QueuePage() {
         </div>
       </div>
 
-      {/* Waiting Builds */}
-      {waitingBuildsData && waitingBuildsData.builds.length > 0 && (
-        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
-            <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-              Top Builds Waiting — {queue}
-            </h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-200 text-left text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-5 py-2.5 font-medium">Build</th>
-                  <th className="px-5 py-2.5 font-medium">Author</th>
-                  <th className="px-5 py-2.5 font-medium">Waiting Jobs</th>
-                  <th className="px-5 py-2.5 font-medium">Max Wait</th>
-                </tr>
-              </thead>
-              <tbody>
-                {waitingBuildsData.builds.map((b) => (
-                  <tr
-                    key={b.build_number}
-                    className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50"
-                  >
-                    <td className="px-5 py-2.5">
-                      <a
-                        href={b.build_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-medium text-blue-600 hover:underline dark:text-blue-400"
-                      >
-                        #{b.build_number}
-                      </a>
-                      <p className="mt-0.5 max-w-xs truncate text-xs text-zinc-400">
-                        {b.message}
-                      </p>
-                    </td>
-                    <td className="whitespace-nowrap px-5 py-2.5">{b.author}</td>
-                    <td className="px-5 py-2.5 font-medium text-yellow-600 dark:text-yellow-400">
-                      {b.waiting_jobs} <span className="font-normal text-zinc-400">/ {b.total_jobs}</span>
-                    </td>
-                    <td className="whitespace-nowrap px-5 py-2.5 text-zinc-600 dark:text-zinc-400">
-                      {formatDuration(parseInt(b.max_wait_min, 10) * 60)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {queue && <QueueWaitingJobs queue={queue} />}
 
       {/* Queue Summary Table */}
       <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
