@@ -5,7 +5,7 @@ import useSWR from "swr";
 import { StatCard } from "@/components/stat-card";
 import { SearchableSelect } from "@/components/searchable-select";
 import { QueueOverviewChart } from "@/components/queue-overview-chart";
-import { QueueWaitingJobs } from "@/components/queue-waiting-jobs";
+import { QueueWaitingJobs, useQueueWaitingJobs } from "@/components/queue-waiting-jobs";
 import { effectiveWaiting } from "@/lib/queue-plugins";
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -104,6 +104,7 @@ export default function QueuePage() {
     refreshInterval: 60 * 1000,
     keepPreviousData: true,
   });
+  const queueJobsQuery = useQueueWaitingJobs(queue);
 
   const historyMatchesQueue = metricsData?.query.queue === (queue || null);
   const historyMatchesSelection =
@@ -183,8 +184,15 @@ export default function QueuePage() {
   const totalAgents = filtered.reduce((s, q) => s + q.agents_total, 0);
   const busyAgents = filtered.reduce((s, q) => s + q.agents_busy, 0);
   const idleAgents = filtered.reduce((s, q) => s + q.agents_idle, 0);
-  const waitingJobs = filtered.reduce((s, q) => s + effectiveWaiting(q.queue, q.jobs_scheduled, q.jobs_waiting), 0);
   const runningJobs = filtered.reduce((s, q) => s + q.jobs_running, 0);
+  const liveWaitingJobs = queueJobsQuery.data?.jobs.length;
+  const liveWaitingJobsDetail = !queue
+    ? "Select a queue"
+    : queueJobsQuery.error
+      ? "Live count unavailable"
+      : liveWaitingJobs === undefined
+        ? "Loading live queue"
+        : "Live command jobs";
 
   return (
     <div className="space-y-6">
@@ -225,8 +233,9 @@ export default function QueuePage() {
         />
         <StatCard
           label="Waiting Jobs"
-          value={waitingJobs}
-          color={waitingJobs > 0 ? "yellow" : "default"}
+          value={liveWaitingJobs ?? "—"}
+          detail={liveWaitingJobsDetail}
+          color={liveWaitingJobs && liveWaitingJobs > 0 ? "yellow" : "default"}
         />
         <StatCard
           label="Running Jobs"
@@ -314,7 +323,7 @@ export default function QueuePage() {
         </div>
       </div>
 
-      {queue && <QueueWaitingJobs queue={queue} />}
+      {queue && <QueueWaitingJobs queue={queue} query={queueJobsQuery} />}
 
       {/* Queue Summary Table */}
       <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
