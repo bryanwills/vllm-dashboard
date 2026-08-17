@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 export const runtime = "nodejs";
 
 const MAX_SPANS = 5_000;
+const COMPLETION_CLOCK_SKEW_MS = 30_000;
 const SLUG = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/;
 
 type TraceRow = {
@@ -296,21 +297,35 @@ export async function GET(request: NextRequest) {
     });
     const lanes = [...jobLanes, ...detailLanes];
 
-    const buildSpan = rows.find((row) => row.span_name === "buildkite.build");
-    const laneStarts = jobLanes.map(
+    const buildSpans = rows.filter(
+      (row) => row.span_name === "buildkite.build",
+    );
+    const laneStarts = lanes.map(
       (lane) => Date.parse(lane.startTime) - lane.waitMs,
     );
-    const laneEnds = jobLanes.map((lane) => Date.parse(lane.endTime));
-    const observedStart = buildSpan
-      ? buildSpan.start_time.getTime()
-      : laneStarts.length > 0
-        ? Math.min(...laneStarts)
-        : Math.min(...rows.map((row) => row.start_time.getTime()));
-    const observedEnd = buildSpan
-      ? buildSpan.end_time.getTime()
-      : laneEnds.length > 0
-        ? Math.max(...laneEnds)
-        : Math.max(...rows.map((row) => row.end_time.getTime()));
+    const laneEnds = lanes.map((lane) => Date.parse(lane.endTime));
+    const buildStarts = buildSpans.map((row) => row.start_time.getTime());
+    const buildEnds = buildSpans.map((row) => row.end_time.getTime());
+    const observedStart = Math.min(
+      ...(buildStarts.length > 0
+        ? buildStarts
+        : rows.map((row) => row.start_time.getTime())),
+      ...laneStarts,
+    );
+    const observedEnd = Math.max(
+      ...(buildEnds.length > 0
+        ? buildEnds
+        : rows.map((row) => row.end_time.getTime())),
+      ...laneEnds,
+    );
+    const latestBuildEnd =
+      buildEnds.length > 0 ? Math.max(...buildEnds) : Number.NEGATIVE_INFINITY;
+    // A Buildkite retry keeps the same build number. The previous attempt's
+    // completed build span can therefore coexist with newer job/detail spans.
+    // Treat the trace as live until a build span covers those newer lanes.
+    const complete =
+      buildSpans.length > 0 &&
+      latestBuildEnd >= observedEnd - COMPLETION_CLOCK_SKEW_MS;
     const latestReceived = Math.max(
       ...rows.map((row) => row.received_at.getTime()),
     );
@@ -322,7 +337,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         available: true,
-        complete: Boolean(buildSpan),
+        complete,
         truncated: rows.length === MAX_SPANS,
         lanes,
         summary: {
