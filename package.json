@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "tsx --test src/**/*.test.ts",
     "lint": "eslint",
     "migrate:gpu-rollups": "node scripts/migrate-gpu-rollups.mjs",
     "migrate:otel": "node scripts/migrate-otel.mjs",
@@ -34,6 +35,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.7",
     "tailwindcss": "^4",
+    "tsx": "^4.23.12",
     "typescript": "^5"
   }
 }

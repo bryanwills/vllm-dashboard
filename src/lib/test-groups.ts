@@ -21,7 +21,7 @@ function resolveGroup(jobName: string, mapping: TestAreaMapping): string | null 
   return null;
 }
 
-function getTestGroup(jobName: string, mapping: TestAreaMapping): string | null {
+export function getTestGroup(jobName: string, mapping: TestAreaMapping): string | null {
   // Direct match or pattern match
   const group = resolveGroup(jobName, mapping);
   if (group) return group;
@@ -38,8 +38,9 @@ function getTestGroup(jobName: string, mapping: TestAreaMapping): string | null 
     return "Hardware-AMD Tests";
   }
 
-  // AMD mirror jobs from CI pipeline (AMD: prefix)
-  if (jobName.startsWith("AMD: ")) {
+  // AMD mirror jobs from CI pipeline. Explicit mirror labels use the Buildkite
+  // emoji prefix; historical mirrors use the generated "AMD: " prefix.
+  if (jobName.startsWith("AMD: ") || jobName.startsWith(":amd: ")) {
     return "Hardware-AMD Tests";
   }
 
@@ -95,6 +96,7 @@ export function resolveGroupsToJobConditions(groups: string[]): { exactNames: st
     regexPatterns.push("^mi\\d+[A-Z]?_\\d+:.*$");
     // AMD image preparation is its own Buildkite group.
     regexPatterns.push("^AMD: (?!:docker: ).*$");
+    regexPatterns.push("^:amd: .*$");
   }
 
   return { exactNames, regexPatterns };

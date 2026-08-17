@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryDatabricks } from "@/lib/databricks";
 import { resolveGroupsToJobConditions } from "@/lib/test-groups";
+import { ensureTestAreaMapping } from "@/lib/test-areas";
 import { getCached, setCache } from "@/lib/api-cache";
 import { cachedJson } from "@/lib/api-response";
 
@@ -89,6 +90,9 @@ export async function GET(request: NextRequest) {
       conditions.push(`b.created_at < DATE_ADD('${endDate.replace(/'/g, "''")}', 1)`);
     }
     const where = conditions.join(" AND ");
+    if (jobGroups.length > 0) {
+      await ensureTestAreaMapping();
+    }
     const jobFilter = buildJobFilterSubquery(jobGroups, jobNames);
 
     // First: fetch the page of builds + total count + daily stats
