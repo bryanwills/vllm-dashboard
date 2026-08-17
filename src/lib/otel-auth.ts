@@ -10,6 +10,7 @@ const DEFAULT_OIDC_AUDIENCE = "https://ci.vllm.ai/api/otel";
 const DEFAULT_ORGANIZATION = "vllm";
 const DEFAULT_PIPELINE = "ci";
 const DEFAULT_BRANCH = "main";
+const DEFAULT_TREATMENT_BRANCH = "khluu/otel";
 
 export type OtlpPrincipal =
   | { kind: "shared-token" }
@@ -78,12 +79,20 @@ export async function authorizeOtlpRequest(
     );
     const pipeline = stringClaim(payload.pipeline_slug, "pipeline_slug");
     const branch = stringClaim(payload.build_branch, "build_branch");
+    const expectedBranch =
+      process.env.OTEL_BUILDKITE_OIDC_BRANCH ?? DEFAULT_BRANCH;
+    const treatmentBranch =
+      process.env.OTEL_BUILDKITE_OIDC_TREATMENT_BRANCH ??
+      DEFAULT_TREATMENT_BRANCH;
+    const trustedBranch = branch === expectedBranch;
+    const trustedTreatment =
+      branch === treatmentBranch && payload.build_source === "api";
     if (
       organization !==
         (process.env.OTEL_BUILDKITE_OIDC_ORGANIZATION ?? DEFAULT_ORGANIZATION) ||
       pipeline !==
         (process.env.OTEL_BUILDKITE_OIDC_PIPELINE ?? DEFAULT_PIPELINE) ||
-      branch !== (process.env.OTEL_BUILDKITE_OIDC_BRANCH ?? DEFAULT_BRANCH)
+      (!trustedBranch && !trustedTreatment)
     ) {
       return null;
     }
