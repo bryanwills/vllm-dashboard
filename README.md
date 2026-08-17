@@ -49,7 +49,7 @@ Open http://localhost:3000.
 | `OTEL_INGEST_TOKEN` | Shared Bearer token used by Buildkite's OTel notification service |
 | `OTEL_MAX_REQUEST_BYTES` | Optional OTLP request limit; defaults to 4 MiB |
 | `OTEL_ENDPOINT` | Buildkite notification-service base URL; defaults operationally to `https://ci.vllm.ai/api/otel` |
-| `OTEL_BUILDKITE_OIDC_AUDIENCE`, `OTEL_BUILDKITE_OIDC_ORGANIZATION`, `OTEL_BUILDKITE_OIDC_PIPELINE`, `OTEL_BUILDKITE_OIDC_BRANCH` | Optional restrictions for short-lived Buildkite job tokens; defaults to the production vLLM main pipeline |
+| `OTEL_BUILDKITE_OIDC_AUDIENCE`, `OTEL_BUILDKITE_OIDC_ORGANIZATION`, `OTEL_BUILDKITE_OIDC_PIPELINE`, `OTEL_BUILDKITE_OIDC_BRANCH`, `OTEL_BUILDKITE_OIDC_TREATMENT_BRANCH` | Optional restrictions for short-lived Buildkite job tokens; defaults to the production vLLM main pipeline plus API-triggered `khluu/otel` treatment builds |
 | `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID` | Slack bot for queue-depth alerts (`chat:write`, `reactions:write`) |
 | `CRON_SECRET` | Optional shared secret required by Vercel cron handlers |
 
@@ -106,8 +106,9 @@ Detailed job timing does not distribute `OTEL_INGEST_TOKEN` to test code. An
 opted-in trusted main-branch job requests a five-minute Buildkite OIDC token for
 the dashboard audience when it uploads a batch. The receiver verifies the
 Buildkite signature and requires the token's organization, pipeline, branch,
-build, and job identity to match every span. Pull-request jobs and AMD mirrors
-are excluded from the initial pilot.
+build, and job identity to match every span. The receiver accepts normal
+`main` jobs and API-triggered `khluu/otel` treatment jobs; pull-request jobs and
+AMD mirrors are excluded from the initial pilot.
 
 The vLLM CI helper creates a span for each generated YAML command. When the
 command invokes pytest, its lightweight pytest plugin sends one child span per
