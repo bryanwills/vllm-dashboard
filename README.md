@@ -106,9 +106,9 @@ Detailed job timing does not distribute `OTEL_INGEST_TOKEN` to test code. An
 opted-in trusted main-branch job requests a five-minute Buildkite OIDC token for
 the dashboard audience when it uploads a batch. The receiver verifies the
 Buildkite signature and requires the token's organization, pipeline, branch,
-build, and job identity to match every span. The receiver accepts normal
-`main` jobs and API-triggered `khluu/otel` treatment jobs; pull-request jobs and
-AMD mirrors are excluded from the initial pilot.
+build number, and globally unique job ID to match every span. The receiver
+accepts normal `main` jobs and API-triggered `khluu/otel` treatment jobs;
+pull-request jobs and AMD mirrors are excluded from the initial pilot.
 
 The vLLM CI helper creates a span for each generated YAML command. When the
 command invokes pytest, its lightweight pytest plugin sends one child span per

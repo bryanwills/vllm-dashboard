@@ -19,7 +19,6 @@ export type OtlpPrincipal =
       organization: string;
       pipeline: string;
       buildNumber: number;
-      buildId: string;
       jobId: string;
       branch: string;
     };
@@ -103,7 +102,6 @@ export async function authorizeOtlpRequest(
       pipeline,
       branch,
       buildNumber: numberClaim(payload.build_number, "build_number"),
-      buildId: stringClaim(payload.build_id, "build_id"),
       jobId: stringClaim(payload.job_id, "job_id"),
     };
   } catch (error) {
@@ -146,8 +144,6 @@ export function spansMatchPrincipal(
         principal.pipeline &&
       primitiveAttribute(attributes, "buildkite.build.number") ===
         String(principal.buildNumber) &&
-      primitiveAttribute(attributes, "buildkite.build.id") ===
-        principal.buildId &&
       primitiveAttribute(attributes, "buildkite.job.id") === principal.jobId &&
       primitiveAttribute(attributes, "buildkite.build.branch") ===
         principal.branch
