@@ -46,9 +46,10 @@ Open http://localhost:3000.
 | `BUILDKITE_API_TOKEN` | Buildkite personal API token; needs `read_suites` for Test Engine, GraphQL API access and `write_builds` for queue promotion, and notification-service scopes only when running the OTel setup script |
 | `BUILDKITE_ORGANIZATION`, `BUILDKITE_TEST_SUITE` | Test Engine organization and suite slug (defaults: `vllm`, `ci-1`) |
 | `BUILDKITE_QUEUE_OPERATOR_TOKEN` | Required to enable queue-job promotion; authorized operators enter it for the current browser tab |
-| `OTEL_INGEST_TOKEN` | Required Bearer token for the OTLP/HTTP trace receiver |
+| `OTEL_INGEST_TOKEN` | Shared Bearer token used by Buildkite's OTel notification service |
 | `OTEL_MAX_REQUEST_BYTES` | Optional OTLP request limit; defaults to 4 MiB |
 | `OTEL_ENDPOINT` | Buildkite notification-service base URL; defaults operationally to `https://ci.vllm.ai/api/otel` |
+| `OTEL_BUILDKITE_OIDC_AUDIENCE`, `OTEL_BUILDKITE_OIDC_ORGANIZATION`, `OTEL_BUILDKITE_OIDC_PIPELINE`, `OTEL_BUILDKITE_OIDC_BRANCH` | Optional restrictions for short-lived Buildkite job tokens; defaults to the production vLLM main pipeline |
 | `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID` | Slack bot for queue-depth alerts (`chat:write`, `reactions:write`) |
 | `CRON_SECRET` | Optional shared secret required by Vercel cron handlers |
 
@@ -95,20 +96,23 @@ job history without introducing another dashboard.
    ```
 
 The Vercel receiver accepts OTLP/HTTP protobuf with optional gzip compression;
-it is not a gRPC collector. To add agent-side checkout, hook, plugin, command,
-and artifact spans, Buildkite agent v3.101 or newer can be configured with:
+it is not a gRPC collector. Buildkite agent v3.100 and newer propagates its
+trace context to job processes, and the vLLM helper continues `TRACEPARENT`
+when it is present. The agent's own span exporter is OTLP/gRPC-only, so adding
+agent-internal checkout, hook, plugin, and artifact spans would still require a
+standard OpenTelemetry Collector in front of this HTTP endpoint.
 
-```bash
-BUILDKITE_TRACING_BACKEND=opentelemetry
-BUILDKITE_TRACING_PROPAGATE_TRACEPARENT=true
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_ENDPOINT=https://ci.vllm.ai/api/otel
-OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $OTEL_INGEST_TOKEN"
-OTEL_TRACES_SAMPLER=always_on
-```
+Detailed job timing does not distribute `OTEL_INGEST_TOKEN` to test code. An
+opted-in trusted main-branch job requests a five-minute Buildkite OIDC token for
+the dashboard audience when it uploads a batch. The receiver verifies the
+Buildkite signature and requires the token's organization, pipeline, branch,
+build, and job identity to match every span. Pull-request jobs and AMD mirrors
+are excluded from the initial pilot.
 
-For older agents that only export OTLP/gRPC, put a standard OpenTelemetry
-Collector in front of this HTTP endpoint or upgrade the agents first.
+The vLLM CI helper creates a span for each generated YAML command. When the
+command invokes pytest, its lightweight pytest plugin sends one child span per
+test node ID. The build timeline groups those spans as job → command → test;
+telemetry errors are warnings and never change the test command's exit status.
 
 ## Deployment
 

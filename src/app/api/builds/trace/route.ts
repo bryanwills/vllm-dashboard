@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-const MAX_SPANS = 2_000;
+const MAX_SPANS = 5_000;
 const SLUG = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/;
 
 type TraceRow = {
@@ -27,14 +27,21 @@ type TraceRow = {
   job_url: string | null;
   step_url: string | null;
   wait_ms: number | null;
+  ci_kind: string | null;
+  command_index: number | null;
+  command_label: string | null;
+  test_nodeid: string | null;
+  test_outcome: string | null;
   received_at: Date;
 };
+
+type LaneKind = "job" | "step" | "command" | "test";
 
 type Lane = {
   id: string;
   parentId: string | null;
   traceId: string;
-  kind: "job" | "step";
+  kind: LaneKind;
   label: string;
   group: string | null;
   stepKey: string | null;
@@ -44,23 +51,27 @@ type Lane = {
   endTime: string;
   durationMs: number;
   waitMs: number;
-  status: "passed" | "failed" | "unknown";
+  status: "passed" | "failed" | "skipped" | "unknown";
+  outcome: string | null;
   url: string | null;
   critical: boolean;
 };
 
 function laneStatus(row: TraceRow): Lane["status"] {
+  if (row.test_outcome === "skipped") return "skipped";
   if (
     row.status_code === 2 ||
     row.job_passed === "false" ||
-    row.step_outcome === "failed"
+    row.step_outcome === "failed" ||
+    row.test_outcome === "failed"
   ) {
     return "failed";
   }
   if (
     row.status_code === 1 ||
     row.job_passed === "true" ||
-    row.step_outcome === "passed"
+    row.step_outcome === "passed" ||
+    row.test_outcome === "passed"
   ) {
     return "passed";
   }
@@ -93,6 +104,40 @@ function error(message: string, status: number) {
     { error: message },
     { status, headers: { "Cache-Control": "no-store" } },
   );
+}
+
+function jobLane(row: TraceRow, id = row.span_id): Lane {
+  return {
+    id,
+    parentId: row.parent_span_id,
+    traceId: row.trace_id,
+    kind: row.span_name === "buildkite.step" ? "step" : "job",
+    label: row.job_label ?? row.step_label ?? row.span_name,
+    group: row.group_label,
+    stepKey: row.step_key,
+    jobId: row.job_id,
+    queue: row.agent_queue,
+    startTime: row.start_time.toISOString(),
+    endTime: row.end_time.toISOString(),
+    durationMs: Number(row.duration_ms),
+    waitMs: Math.max(0, Number(row.wait_ms ?? 0)),
+    status: laneStatus(row),
+    outcome: row.job_state ?? row.step_outcome,
+    url: row.job_url ?? row.step_url,
+    critical: false,
+  };
+}
+
+function detailKind(row: TraceRow): "command" | "test" | null {
+  if (row.ci_kind === "command") return "command";
+  if (row.ci_kind === "test") return "test";
+  return null;
+}
+
+function detailLabel(row: TraceRow, kind: "command" | "test"): string {
+  if (kind === "test") return row.test_nodeid ?? row.span_name;
+  const prefix = row.command_index ? `${row.command_index}. ` : "";
+  return `${prefix}${row.command_label ?? row.span_name}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -131,10 +176,19 @@ export async function GET(request: NextRequest) {
         NULLIF(span_attributes->>'buildkite.job.web_url', '') AS job_url,
         NULLIF(span_attributes->>'buildkite.step.web_url', '') AS step_url,
         CASE
-          WHEN span_attributes->>'buildkite.job.wait_time_ms' ~ '^\\d+(\\.\\d+)?$'
+          WHEN span_attributes->>'buildkite.job.wait_time_ms' ~ '^\d+(\.\d+)?$'
           THEN (span_attributes->>'buildkite.job.wait_time_ms')::double precision
           ELSE 0
         END AS wait_ms,
+        NULLIF(span_attributes->>'ci.span.kind', '') AS ci_kind,
+        CASE
+          WHEN span_attributes->>'ci.command.index' ~ '^\d+$'
+          THEN (span_attributes->>'ci.command.index')::integer
+          ELSE NULL
+        END AS command_index,
+        NULLIF(span_attributes->>'ci.command.label', '') AS command_label,
+        NULLIF(span_attributes->>'test.nodeid', '') AS test_nodeid,
+        NULLIF(span_attributes->>'test.outcome', '') AS test_outcome,
         received_at
       FROM otel_spans
       WHERE organization_slug = ${organization}
@@ -163,20 +217,69 @@ export async function GET(request: NextRequest) {
         .map((row) => row.parent_span_id)
         .filter((value): value is string => Boolean(value)),
     );
-    const displayRows = rows.filter(
+    const controlRows = rows.filter(
       (row) =>
         row.span_name === "buildkite.job" ||
         (row.span_name === "buildkite.step" &&
           !childJobParents.has(row.span_id)),
     );
+    const details = rows.filter((row) => detailKind(row) !== null);
 
-    const lanes = markCompletionFrontier(
-      displayRows.map((row) => ({
+    const baseJobLanes = controlRows.map((row) => jobLane(row));
+    const jobLaneByJobId = new Map(
+      baseJobLanes
+        .filter((lane) => lane.jobId)
+        .map((lane) => [lane.jobId as string, lane]),
+    );
+
+    const detailRowsByJobId = new Map<string, TraceRow[]>();
+    for (const row of details) {
+      if (!row.job_id) continue;
+      const jobRows = detailRowsByJobId.get(row.job_id) ?? [];
+      jobRows.push(row);
+      detailRowsByJobId.set(row.job_id, jobRows);
+    }
+    for (const [jobId, jobRows] of detailRowsByJobId) {
+      if (jobLaneByJobId.has(jobId)) continue;
+      const first = jobRows[0];
+      const start = Math.min(...jobRows.map((row) => row.start_time.getTime()));
+      const end = Math.max(...jobRows.map((row) => row.end_time.getTime()));
+      const synthetic = jobLane(first, `job:${jobId}`);
+      synthetic.parentId = null;
+      synthetic.startTime = new Date(start).toISOString();
+      synthetic.endTime = new Date(end).toISOString();
+      synthetic.durationMs = Math.max(0, end - start);
+      synthetic.waitMs = 0;
+      synthetic.status = jobRows.some((row) => laneStatus(row) === "failed")
+        ? "failed"
+        : "unknown";
+      baseJobLanes.push(synthetic);
+      jobLaneByJobId.set(jobId, synthetic);
+    }
+
+    const jobLanes = markCompletionFrontier(baseJobLanes);
+    const commandIds = new Set(
+      details
+        .filter((row) => detailKind(row) === "command")
+        .map((row) => row.span_id),
+    );
+    const detailLanes = details.map((row): Lane => {
+      const kind = detailKind(row) as "command" | "test";
+      const jobParent = row.job_id
+        ? (jobLaneByJobId.get(row.job_id)?.id ?? null)
+        : null;
+      const parentId =
+        kind === "test" &&
+        row.parent_span_id &&
+        commandIds.has(row.parent_span_id)
+          ? row.parent_span_id
+          : jobParent;
+      return {
         id: row.span_id,
-        parentId: row.parent_span_id,
+        parentId,
         traceId: row.trace_id,
-        kind: row.span_name === "buildkite.job" ? "job" : "step",
-        label: row.job_label ?? row.step_label ?? row.span_name,
+        kind,
+        label: detailLabel(row, kind),
         group: row.group_label,
         stepKey: row.step_key,
         jobId: row.job_id,
@@ -184,18 +287,20 @@ export async function GET(request: NextRequest) {
         startTime: row.start_time.toISOString(),
         endTime: row.end_time.toISOString(),
         durationMs: Number(row.duration_ms),
-        waitMs: Math.max(0, Number(row.wait_ms ?? 0)),
+        waitMs: 0,
         status: laneStatus(row),
-        url: row.job_url ?? row.step_url,
+        outcome: kind === "test" ? row.test_outcome : null,
+        url: null,
         critical: false,
-      })),
-    );
+      };
+    });
+    const lanes = [...jobLanes, ...detailLanes];
 
     const buildSpan = rows.find((row) => row.span_name === "buildkite.build");
-    const laneStarts = lanes.map(
+    const laneStarts = jobLanes.map(
       (lane) => Date.parse(lane.startTime) - lane.waitMs,
     );
-    const laneEnds = lanes.map((lane) => Date.parse(lane.endTime));
+    const laneEnds = jobLanes.map((lane) => Date.parse(lane.endTime));
     const observedStart = buildSpan
       ? buildSpan.start_time.getTime()
       : laneStarts.length > 0
@@ -209,6 +314,10 @@ export async function GET(request: NextRequest) {
     const latestReceived = Math.max(
       ...rows.map((row) => row.received_at.getTime()),
     );
+    const commandCount = detailLanes.filter(
+      (lane) => lane.kind === "command",
+    ).length;
+    const testCount = detailLanes.filter((lane) => lane.kind === "test").length;
 
     return NextResponse.json(
       {
@@ -221,12 +330,14 @@ export async function GET(request: NextRequest) {
           observedEnd: new Date(observedEnd).toISOString(),
           observedDurationMs: Math.max(0, observedEnd - observedStart),
           spanCount: rows.length,
-          laneCount: lanes.length,
+          laneCount: jobLanes.length,
+          commandCount,
+          testCount,
           traceCount: new Set(rows.map((row) => row.trace_id)).size,
           queueCount: new Set(
-            lanes.map((lane) => lane.queue).filter(Boolean),
+            jobLanes.map((lane) => lane.queue).filter(Boolean),
           ).size,
-          criticalCount: lanes.filter((lane) => lane.critical).length,
+          criticalCount: jobLanes.filter((lane) => lane.critical).length,
           latestReceivedAt: new Date(latestReceived).toISOString(),
         },
       },

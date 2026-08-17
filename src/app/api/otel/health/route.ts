@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { isOtlpAuthorized, isOtlpConfigured } from "@/lib/otel-auth";
+import { authorizeOtlpRequest, isOtlpConfigured } from "@/lib/otel-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +12,8 @@ export async function GET(request: NextRequest) {
       { status: 503 },
     );
   }
-  if (!isOtlpAuthorized(request.headers)) {
+  const principal = await authorizeOtlpRequest(request.headers);
+  if (principal?.kind !== "shared-token") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
