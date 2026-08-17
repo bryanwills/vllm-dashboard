@@ -1,12 +1,12 @@
 import yaml from "js-yaml";
 
-interface TestStep {
+export interface TestStep {
   label: string;
   parallelism?: number;
   optional?: boolean;
 }
 
-interface TestArea {
+export interface TestArea {
   group: string;
   steps: TestStep[];
 }
@@ -209,14 +209,23 @@ function buildMapping(areas: { group: string; labels: string[] }[]): TestAreaMap
   return { jobToGroup, patterns, groups };
 }
 
+export function buildTestAreaMapping(areas: TestArea[]): TestAreaMapping {
+  return buildMapping([
+    ...SEED_DATA.map(([group, labels]) => ({ group, labels })),
+    ...areas.map((area) => ({
+      group: area.group,
+      labels: area.steps.map((step) => step.label),
+    })),
+    ...PIPELINE_GROUP_DATA.map(([group, labels]) => ({ group, labels })),
+  ]);
+}
+
 // Build static mapping immediately — no async, no network
-const STATIC_MAPPING = buildMapping(
-  [...SEED_DATA, ...PIPELINE_GROUP_DATA].map(([group, labels]) => ({ group, labels }))
-);
+const STATIC_MAPPING = buildTestAreaMapping([]);
 
 let cachedMapping: TestAreaMapping = STATIC_MAPPING;
 let cacheExpiry = 0;
-let refreshing = false;
+let refreshPromise: Promise<void> | null = null;
 
 async function fetchTestAreas(): Promise<TestArea[]> {
   const listRes = await fetch(GITHUB_API_URL, {
@@ -249,25 +258,24 @@ async function fetchTestAreas(): Promise<TestArea[]> {
   return areas;
 }
 
-async function refreshMapping() {
-  if (refreshing) return;
-  refreshing = true;
-  try {
-    const areas = await fetchTestAreas();
-    cachedMapping = buildMapping(
-      [
-        ...areas.map((a) => ({ group: a.group, labels: a.steps.map((s) => s.label) })),
-        ...PIPELINE_GROUP_DATA.map(([group, labels]) => ({ group, labels })),
-      ]
-    );
-    cacheExpiry = Date.now() + CACHE_TTL;
-  } catch (error) {
-    console.error("Failed to refresh test areas from GitHub:", error);
-    // Keep using existing mapping (static or previously fetched)
-    cacheExpiry = Date.now() + 5 * 60 * 1000; // retry in 5 min
-  } finally {
-    refreshing = false;
-  }
+function refreshMapping(): Promise<void> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const areas = await fetchTestAreas();
+      cachedMapping = buildTestAreaMapping(areas);
+      cacheExpiry = Date.now() + CACHE_TTL;
+    } catch (error) {
+      console.error("Failed to refresh test areas from GitHub:", error);
+      // Keep using existing mapping (static or previously fetched)
+      cacheExpiry = Date.now() + 5 * 60 * 1000; // retry in 5 min
+    }
+  })().finally(() => {
+    refreshPromise = null;
+  });
+
+  return refreshPromise;
 }
 
 export function getTestAreaMapping(): TestAreaMapping {
@@ -275,6 +283,13 @@ export function getTestAreaMapping(): TestAreaMapping {
   if (Date.now() >= cacheExpiry) {
     // Trigger background refresh, don't await
     refreshMapping();
+  }
+  return cachedMapping;
+}
+
+export async function ensureTestAreaMapping(): Promise<TestAreaMapping> {
+  if (Date.now() >= cacheExpiry) {
+    await refreshMapping();
   }
   return cachedMapping;
 }
