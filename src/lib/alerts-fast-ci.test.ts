@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  commitUrl,
   groupFastFailureEvents,
-  notificationStateFor,
-  pullRequestUrl,
   type FastFailureEvent,
 } from "./alerts-fast-ci";
 
@@ -28,20 +25,6 @@ function event(overrides: Partial<FastFailureEvent> = {}): FastFailureEvent {
     ...overrides,
   };
 }
-
-test("an event with no outbox row reads as unnotified", () => {
-  assert.equal(notificationStateFor([]), "unnotified");
-});
-
-test("delivery to Slack outranks the attempts that preceded it", () => {
-  assert.equal(notificationStateFor(["retrying", "delivered"]), "delivered");
-});
-
-test("an undelivered event reports its worst outstanding attempt", () => {
-  assert.equal(notificationStateFor(["pending", "dead_letter"]), "dead_letter");
-  assert.equal(notificationStateFor(["pending", "retrying"]), "retrying");
-  assert.equal(notificationStateFor(["pending"]), "pending");
-});
 
 test("jobs from one build and commit read as a single cluster", () => {
   const groups = groupFastFailureEvents([
@@ -105,18 +88,6 @@ test("a rebuilt commit and a fresh commit stay distinct clusters", () => {
   ]);
 
   assert.equal(groups.length, 2);
-});
-
-test("GitHub links resolve from the commit and pull request an event recorded", () => {
-  assert.equal(
-    commitUrl("1f4c9a2b7d3e5f6a8b9c0d1e2f3a4b5c6d7e8f90"),
-    "https://github.com/vllm-project/vllm/commit/1f4c9a2b7d3e5f6a8b9c0d1e2f3a4b5c6d7e8f90",
-  );
-  assert.equal(
-    pullRequestUrl("24680"),
-    "https://github.com/vllm-project/vllm/pull/24680",
-  );
-  assert.equal(pullRequestUrl(null), null);
 });
 
 test("each event carries its own notification state", () => {

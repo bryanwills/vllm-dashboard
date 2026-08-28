@@ -1,41 +1,10 @@
+import { NotificationBadge } from "@/components/alert-notification-badge";
+import { type FastFailureGroup } from "@/lib/alerts-fast-ci";
 import {
   commitUrl,
-  NOTIFICATION_STATE_LABELS,
+  formatAlertDateTime,
   pullRequestUrl,
-  type FastFailureGroup,
-  type NotificationState,
-} from "@/lib/alerts-fast-ci";
-
-const NOTIFICATION_STATE_CLASSES: Record<NotificationState, string> = {
-  delivered:
-    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-  pending: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-  retrying:
-    "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  dead_letter: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
-  unnotified: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
-};
-
-function formatDateTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function NotificationBadge({ state }: { state: NotificationState }) {
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${NOTIFICATION_STATE_CLASSES[state]}`}
-    >
-      {NOTIFICATION_STATE_LABELS[state]}
-    </span>
-  );
-}
+} from "@/lib/alerts-shared";
 
 function GroupCard({ group }: { group: FastFailureGroup }) {
   const prUrl = pullRequestUrl(group.prNumber);
@@ -75,7 +44,7 @@ function GroupCard({ group }: { group: FastFailureGroup }) {
         <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
           {group.events.length} fast{" "}
           {group.events.length === 1 ? "failure" : "failures"} ·{" "}
-          {formatDateTime(group.latestFinishedAt)}
+          {formatAlertDateTime(group.latestFinishedAt)}
         </span>
         <p className="w-full truncate text-xs text-zinc-500 dark:text-zinc-400">
           {group.message}
@@ -108,7 +77,7 @@ function GroupCard({ group }: { group: FastFailureGroup }) {
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-3">
               <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                {formatDateTime(event.finishedAt)}
+                {formatAlertDateTime(event.finishedAt)}
               </span>
               <NotificationBadge state={event.notificationState} />
             </span>

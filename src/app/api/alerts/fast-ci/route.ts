@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import type {
-  FastFailureEvent,
-  NotificationStatus,
-} from "@/lib/alerts-fast-ci";
+import type { FastFailureEvent } from "@/lib/alerts-fast-ci";
+import type { NotificationStatus } from "@/lib/alerts-shared";
 
 export const dynamic = "force-dynamic";
 
