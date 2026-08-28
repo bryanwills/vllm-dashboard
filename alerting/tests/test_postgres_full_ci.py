@@ -55,6 +55,22 @@ class Transaction:
         return False
 
 
+class _ConnectionCursor:
+    """psycopg3-style cursor facade over the fake connection."""
+
+    def __init__(self, connection: "FakePostgresConnection") -> None:
+        self._connection = connection
+
+    def __enter__(self) -> "_ConnectionCursor":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def executemany(self, sql: str, params: list[tuple[Any, ...]]) -> "Result":
+        return self._connection.executemany(sql, params)
+
+
 class FakePostgresConnection:
     def __init__(self) -> None:
         self.state: dict[str, Any] = {
@@ -146,6 +162,9 @@ class FakePostgresConnection:
             executions[params[1]].update(status="failed", lease=None)
             return Result(rowcount=1)
         raise AssertionError(f"unexpected SQL: {statement}")
+
+    def cursor(self) -> _ConnectionCursor:
+        return _ConnectionCursor(self)
 
     def executemany(self, sql: str, params: list[tuple[Any, ...]]) -> Result:
         assert self.transaction_depth == 1

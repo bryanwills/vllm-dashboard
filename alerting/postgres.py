@@ -52,6 +52,12 @@ if TYPE_CHECKING:
     from alerting.migration import ImportedFastCIJob
 
 
+def _executemany(connection: Any, sql: str, rows: list[tuple[Any, ...]]) -> None:
+    """psycopg3 exposes executemany on cursors, not connections."""
+    with connection.cursor() as cursor:
+        cursor.executemany(sql, rows)
+
+
 class PostgresAlertStore:
     """One database-backed implementation of all transactional alert stores."""
 
@@ -453,7 +459,7 @@ class PostgresAlertStore:
                 ]
                 summary = recovery_notification(events, stale_delivery_ids)
                 self._enqueue(connection, summary.message, next_attempt_at=now)
-                connection.executemany(
+                _executemany(connection,
                     """
                     INSERT INTO alerting_fast_failure_notifications (
                         buildkite_job_id, delivery_id
@@ -601,7 +607,7 @@ class PostgresAlertStore:
                             "Buildkite baseline identity conflicts with an existing run"
                         )
                     if baseline_run.jobs:
-                        connection.executemany(
+                        _executemany(connection,
                             """
                             INSERT INTO alerting_full_ci_job_outcomes (
                                 buildkite_build_id, job_name, state, soft_failed
@@ -647,7 +653,7 @@ class PostgresAlertStore:
                         ),
                     )
                 if fast_ci_jobs:
-                    connection.executemany(
+                    _executemany(connection,
                         """
                         INSERT INTO alerting_fast_ci_imported_deduplication_keys (
                             buildkite_job_id, finished_at, imported_at
@@ -721,7 +727,7 @@ class PostgresAlertStore:
 
                 for batch in batch_factory(new_events):
                     self._enqueue(connection, batch.message, next_attempt_at=now)
-                    connection.executemany(
+                    _executemany(connection,
                         """
                         INSERT INTO alerting_fast_failure_notifications (
                             buildkite_job_id, delivery_id
@@ -833,7 +839,7 @@ class PostgresAlertStore:
 
                     jobs_by_name = {job.name: job for job in run.jobs}
                     if jobs_by_name:
-                        connection.executemany(
+                        _executemany(connection,
                             """
                             INSERT INTO alerting_full_ci_job_outcomes (
                                 buildkite_build_id, job_name, state, soft_failed
@@ -1015,7 +1021,7 @@ class PostgresAlertStore:
                 if inserted is None:
                     return  # already committed by an earlier attempt
                 if analysis.conditions:
-                    connection.executemany(
+                    _executemany(connection,
                         """
                         INSERT INTO alerting_full_ci_failure_conditions (
                             current_build_id, job_name, lifecycle, cause, summary,

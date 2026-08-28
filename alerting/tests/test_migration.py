@@ -257,6 +257,22 @@ class Transaction:
         return False
 
 
+class _ConnectionCursor:
+    """psycopg3-style cursor facade over the fake connection."""
+
+    def __init__(self, connection: "ImportConnection") -> None:
+        self._connection = connection
+
+    def __enter__(self) -> "_ConnectionCursor":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def executemany(self, sql: str, params: list[tuple[Any, ...]]) -> "Result":
+        return self._connection.executemany(sql, params)
+
+
 class ImportConnection:
     def __init__(self) -> None:
         self.state: dict[str, Any] = {
@@ -318,6 +334,9 @@ class ImportConnection:
             return Result(rowcount=1)
         raise AssertionError(f"unexpected SQL: {statement}")
 
+    def cursor(self) -> _ConnectionCursor:
+        return _ConnectionCursor(self)
+
     def executemany(self, sql: str, params: list[tuple[Any, ...]]) -> Result:
         statement = " ".join(sql.split())
         assert self.transaction_depth == 1
@@ -376,9 +395,7 @@ def test_postgres_import_commits_baseline_checkpoint_and_deduplication_keys_once
             baseline_run=run,
             failure_cache=cache,
             reported_build_numbers=(123, 122),
-            checkpoint=CheckpointRef(
-                "s3://checkpoints/orphan.tar.gz", "def456", 1
-            ),
+            checkpoint=CheckpointRef("s3://checkpoints/orphan.tar.gz", "def456", 1),
             fast_ci_jobs=(imported_job,),
             now=NOW,
         )
