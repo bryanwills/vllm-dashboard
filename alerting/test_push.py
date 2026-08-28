@@ -8,10 +8,12 @@ uses, so what lands in the channel is what a real alert looks like.
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 
 from alerting.fast_ci import (
     FAST_CI_SLACK_CHANNEL,
+    SLACK_BATCH_SIZE,
     FastFailureEvent,
     FastFailureState,
     _build_message,
@@ -64,7 +66,48 @@ def sample_events(now: datetime) -> list[FastFailureEvent]:
     ]
 
 
-def main() -> int:
+def events_from_database(database_url: str, limit: int) -> list[FastFailureEvent]:
+    """Load the most recent real fast failure events from Postgres."""
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        rows = connection.execute(
+            """
+            SELECT buildkite_job_id, job_name, job_url, state, soft_failed,
+                   duration_seconds, finished_at, build_url, message,
+                   commit_sha, branch, author, pr_number, pipeline
+            FROM alerting_fast_failure_events
+            ORDER BY finished_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        FastFailureEvent(
+            job_id=str(row["buildkite_job_id"]),
+            job_name=str(row["job_name"]),
+            job_url=str(row["job_url"]),
+            state=FastFailureState(str(row["state"])),
+            soft_failed=bool(row["soft_failed"]),
+            duration_seconds=int(row["duration_seconds"]),
+            finished_at=row["finished_at"],
+            build_url=str(row["build_url"]),
+            message=str(row["message"]),
+            commit_sha=str(row["commit_sha"]),
+            branch=str(row["branch"]),
+            author=str(row["author"]),
+            pr_number=row["pr_number"],
+            pipeline=str(row["pipeline"]),
+        )
+        for row in rows
+    ]
+
+
+def main(arguments: list[str] | None = None) -> int:
+    args = arguments if arguments is not None else sys.argv[1:]
+    from_database = "--from-db" in args
+
     token = os.environ.get("SLACK_BOT_TOKEN")
     if not token:
         raise RuntimeError(
@@ -72,7 +115,20 @@ def main() -> int:
         )
 
     now = datetime.now(timezone.utc)
-    text = _build_message(sample_events(now), 1, 1)
+    if from_database:
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError(
+                "required environment variable is missing: DATABASE_URL"
+            )
+        events = events_from_database(database_url, SLACK_BATCH_SIZE)
+        if not events:
+            print("no fast failure events in Postgres to send")
+            return 1
+    else:
+        events = sample_events(now)
+
+    text = _build_message(events, 1, 1)
     print(text)
 
     delivery_id = f"fast-ci-test-push:{now.isoformat(timespec='seconds')}"
