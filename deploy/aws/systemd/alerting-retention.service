@@ -1,0 +1,22 @@
+[Unit]
+Description=Prune alerting rows past their retention window
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=alerting
+Group=alerting
+ExecStart=/opt/alerting/bin/run-retention
+StandardOutput=null
+StandardError=null
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+TimeoutStartSec=10min

@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 
 // Fast Failure Events are an operational feed, not an archive: a week of
 // history is what an incident responder reads, and the cap keeps a burst of
-// startup failures from returning an unbounded response.
+// startup failures from returning an unbounded response. A daily systemd
+// timer on the alerting worker prunes rows that age past the window.
 const WINDOW_DAYS = 7;
 const MAX_EVENTS = 500;
 

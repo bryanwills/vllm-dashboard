@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  alertWindowCutoff,
   commitUrl,
+  isAlertTimeWindow,
   notificationStateFor,
   pullRequestUrl,
+  withinAlertWindow,
 } from "./alerts-shared";
 
 test("an alert with no outbox row reads as unnotified", () => {
@@ -30,4 +33,41 @@ test("GitHub links resolve from a commit and a pull request number", () => {
     "https://github.com/vllm-project/vllm/pull/24680",
   );
   assert.equal(pullRequestUrl(null), null);
+});
+
+test("only the four named windows parse as alert time windows", () => {
+  assert.equal(isAlertTimeWindow("1h"), true);
+  assert.equal(isAlertTimeWindow("3h"), true);
+  assert.equal(isAlertTimeWindow("1d"), true);
+  assert.equal(isAlertTimeWindow("7d"), true);
+  assert.equal(isAlertTimeWindow("30d"), false);
+  assert.equal(isAlertTimeWindow(null), false);
+});
+
+test("a window cutoff steps back from now by the window's length", () => {
+  const now = new Date("2026-08-28T12:00:00.000Z");
+  assert.equal(
+    alertWindowCutoff("1h", now).toISOString(),
+    "2026-08-28T11:00:00.000Z",
+  );
+  assert.equal(
+    alertWindowCutoff("3h", now).toISOString(),
+    "2026-08-28T09:00:00.000Z",
+  );
+  assert.equal(
+    alertWindowCutoff("1d", now).toISOString(),
+    "2026-08-27T12:00:00.000Z",
+  );
+  assert.equal(
+    alertWindowCutoff("7d", now).toISOString(),
+    "2026-08-21T12:00:00.000Z",
+  );
+});
+
+test("a timestamp at the cutoff is inside, before it is outside", () => {
+  const cutoff = new Date("2026-08-28T11:00:00.000Z");
+  assert.equal(withinAlertWindow("2026-08-28T11:00:00.000Z", cutoff), true);
+  assert.equal(withinAlertWindow("2026-08-28T12:00:00.000Z", cutoff), true);
+  assert.equal(withinAlertWindow("2026-08-28T10:59:59.999Z", cutoff), false);
+  assert.equal(withinAlertWindow("not-a-date", cutoff), false);
 });

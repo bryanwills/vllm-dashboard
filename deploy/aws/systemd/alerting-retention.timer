@@ -1,0 +1,13 @@
+[Unit]
+Description=Prune alerting rows past their retention window once a day in Pacific time
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*-*-* 03:00:00 America/Los_Angeles
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=0
+Unit=alerting-retention.service
+
+[Install]
+WantedBy=timers.target

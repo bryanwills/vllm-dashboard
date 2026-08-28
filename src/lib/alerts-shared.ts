@@ -57,6 +57,48 @@ export function formatAlertDateTime(iso: string): string {
   });
 }
 
+/**
+ * The alerts views keep a bounded history (seven days for Fast CI), and the
+ * reader narrows it further to what an incident window actually spans.
+ */
+export type AlertTimeWindow = "1h" | "3h" | "1d" | "7d";
+
+export const ALERT_TIME_WINDOWS: readonly {
+  value: AlertTimeWindow;
+  label: string;
+}[] = [
+  { value: "1h", label: "Past 1h" },
+  { value: "3h", label: "Past 3h" },
+  { value: "1d", label: "Past 1d" },
+  { value: "7d", label: "Past 7d" },
+];
+
+const ALERT_WINDOW_MS: Record<AlertTimeWindow, number> = {
+  "1h": 60 * 60 * 1000,
+  "3h": 3 * 60 * 60 * 1000,
+  "1d": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+};
+
+export function isAlertTimeWindow(
+  value: string | null,
+): value is AlertTimeWindow {
+  return value !== null && value in ALERT_WINDOW_MS;
+}
+
+export function alertWindowCutoff(
+  window: AlertTimeWindow,
+  now: Date = new Date(),
+): Date {
+  return new Date(now.getTime() - ALERT_WINDOW_MS[window]);
+}
+
+/** A timestamp that cannot be parsed is excluded rather than guessed at. */
+export function withinAlertWindow(iso: string, cutoff: Date): boolean {
+  const time = new Date(iso).getTime();
+  return !Number.isNaN(time) && time >= cutoff.getTime();
+}
+
 const VLLM_REPO_URL = "https://github.com/vllm-project/vllm";
 
 export function commitUrl(commitSha: string): string {

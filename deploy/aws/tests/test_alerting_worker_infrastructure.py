@@ -154,6 +154,22 @@ def test_deployment_contract_requires_a_read_only_github_credential() -> None:
     assert "no repository write" in documentation
 
 
+def test_retention_timer_prunes_daily_without_sensitive_data() -> None:
+    service = read("systemd/alerting-retention.service")
+    timer = read("systemd/alerting-retention.timer")
+    installer = read("install.sh")
+
+    assert "run-retention" in service
+    assert "StandardOutput=null" in service
+    assert "StandardError=null" in service
+    assert "OnCalendar=*-*-* 03:00:00 America/Los_Angeles" in timer
+    assert "Persistent=true" in timer
+    assert "run-retention" in installer
+    assert "systemctl enable --now alerting-retention.timer" in installer
+    for sensitive_name in ("DATABASE_URL", "TOKEN", "PASSWORD"):
+        assert sensitive_name not in service + timer
+
+
 @pytest.mark.parametrize(
     ("consumer", "command_type"),
     [("full-ci", "full_ci_reconcile"), ("fast-ci", "fast_ci_scan")],
