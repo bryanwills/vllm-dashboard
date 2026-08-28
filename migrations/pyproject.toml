@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-dashboard-migrations"
+version = "0.1.0"
+description = "Ordered Postgres schema migrations for the vLLM CI dashboard."
+requires-python = ">=3.12"
+dependencies = ["psycopg[binary]>=3.2"]
+
+[project.scripts]
+vllm-dashboard-migrate = "migrations.runner:main"
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "ruff==0.14.0",
+]
+
+[tool.setuptools]
+packages = ["migrations"]
+package-dir = {migrations = "."}
+
+[tool.setuptools.package-data]
+migrations = ["sql/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

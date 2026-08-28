@@ -21,6 +21,11 @@ A Next.js dashboard for observing vLLM's Buildkite CI: build status, job runtime
   - Buildkite GraphQL API (queue depth, running jobs, connected agents, and current wait distribution) — every 5 minutes
   - Databricks warehouse (build/job history) — on dashboard requests with short-lived caching
   - Queue alerting → Slack — every 15 minutes
+- **Alert production**: The separately deployed Python worker lives in
+  [`alerting/`](./alerting).
+- **Schema migrations**: All Postgres table definitions and migration execution
+  live in the Python [`migrations/`](./migrations) module. Runtime request
+  handlers never create or alter tables.
 - Cron schedules live in `vercel.json`.
 
 The Queue page uses Buildkite's cluster-queue counts directly. Because the
@@ -34,8 +39,10 @@ the same five-minute snapshot feeds the historical chart.
 cp .env.local.example .env.local
 # fill in your own credentials
 npm install
-npm run migrate:gpu-rollups
-npm run migrate:otel
+DATABASE_URL=postgres://... npm run migrate
+# Review the printed target and pending files, then apply them explicitly:
+DATABASE_URL=postgres://... npm run migrate -- \
+  --apply --confirm-target db.example.supabase.co:5432/postgres
 npm run dev
 ```
 
@@ -61,9 +68,10 @@ The dashboard assumes a warehouse schema with tables under `vllm_data_warehouse.
 
 GPU telemetry is written to raw `gpu_snapshots` rows and an incremental
 `gpu_history_5m` rollup used by the 24-hour through 30-day dashboard views.
-Run `npm run migrate:gpu-rollups` once before deploying a version that reads
-the rollup. The migration is idempotent and backfills existing raw snapshots;
-schema creation is intentionally kept out of user-facing request handlers.
+Run the migration plan and explicit apply command documented in
+[`migrations/`](./migrations) before deploying a version that reads new schema.
+The migration is idempotent and backfills existing GPU snapshots into the
+rollup; schema creation is intentionally kept out of request handlers.
 
 ## OpenTelemetry trace ingestion
 
@@ -75,7 +83,8 @@ job history without introducing another dashboard.
 1. Generate a dedicated random `OTEL_INGEST_TOKEN` with
    `openssl rand -hex 32` and add it to the Vercel project. Do not reuse a
    Buildkite or database credential.
-2. Run `npm run migrate:otel` against the production `DATABASE_URL`.
+2. Plan and explicitly apply [`migrations/`](./migrations) against the production
+   `DATABASE_URL`.
 3. Deploy the dashboard and verify the authenticated
    `GET /api/otel/health` endpoint.
 4. Create or reconcile Buildkite's OpenTelemetry notification service:

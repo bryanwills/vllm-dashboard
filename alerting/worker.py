@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 
 from alerting.commands import Command
 from alerting.ports import Clock
-from alerting.postgres import build_fast_ci_runtime, build_full_ci_runtime
+from alerting.postgres import (
+    build_fast_ci_runtime,
+    build_full_ci_analysis_runtime,
+    build_full_ci_runtime,
+)
 from alerting.runtime import AlertingRuntime, ProcessStatus
 from alerting.slack import SlackDeliveryPort
 
@@ -29,9 +33,12 @@ def _required_environment(name: str) -> str:
 
 
 def _slack() -> SlackDeliveryPort:
+    webhook_urls = {}
+    if url := os.environ.get("VLLM_CI_SLACK_URL"):
+        webhook_urls["vllm-ci"] = url
     return SlackDeliveryPort(
         bot_token=os.environ.get("SLACK_BOT_TOKEN"),
-        webhook_urls={},
+        webhook_urls=webhook_urls,
     )
 
 
@@ -42,9 +49,7 @@ def _runtime(consumer: str, clock: Clock) -> AlertingRuntime:
             database_url=database_url,
             databricks_host=_required_environment("DATABRICKS_HOST"),
             databricks_token=_required_environment("DATABRICKS_TOKEN"),
-            databricks_warehouse_id=_required_environment(
-                "DATABRICKS_WAREHOUSE_ID"
-            ),
+            databricks_warehouse_id=_required_environment("DATABRICKS_WAREHOUSE_ID"),
             slack=_slack(),
             clock=clock,
         )
@@ -52,6 +57,15 @@ def _runtime(consumer: str, clock: Clock) -> AlertingRuntime:
         return build_full_ci_runtime(
             database_url=database_url,
             buildkite_token=_required_environment("BUILDKITE_TOKEN"),
+            slack=_slack(),
+            clock=clock,
+        )
+    if consumer == "full-ci-analyze":
+        return build_full_ci_analysis_runtime(
+            database_url=database_url,
+            buildkite_token=_required_environment("BUILDKITE_TOKEN"),
+            github_token=_required_environment("GITHUB_TOKEN"),
+            checkpoint_bucket=_required_environment("ANALYZER_CHECKPOINT_BUCKET"),
             slack=_slack(),
             clock=clock,
         )
@@ -65,6 +79,7 @@ def scheduled_command(consumer: str, target_time: datetime) -> Command:
     command_types = {
         "fast-ci": "fast_ci_scan",
         "full-ci": "full_ci_reconcile",
+        "full-ci-analyze": "full_ci_analyze",
     }
     try:
         command_type = command_types[consumer]
@@ -76,14 +91,14 @@ def scheduled_command(consumer: str, target_time: datetime) -> Command:
 
 def main(arguments: Sequence[str] | None = None) -> int:
     args = list(arguments if arguments is not None else sys.argv[1:])
-    if len(args) != 1 or args[0] not in {"fast-ci", "full-ci"}:
+    if len(args) != 1 or args[0] not in {"fast-ci", "full-ci", "full-ci-analyze"}:
         return 2
 
     consumer = args[0]
     clock = SystemClock()
-    result = _runtime(consumer, clock).process_command(
-        scheduled_command(consumer, clock.now())
-    )
+    runtime = _runtime(consumer, clock)
+    result = runtime.process_command(scheduled_command(consumer, clock.now()))
+    runtime.dispatch_due_notifications()
     return 1 if result.status is ProcessStatus.FAILED else 0
 
 
