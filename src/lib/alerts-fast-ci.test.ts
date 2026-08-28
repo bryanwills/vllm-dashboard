@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  commitUrl,
+  groupFastFailureEvents,
+  notificationStateFor,
+  pullRequestUrl,
+  type FastFailureEvent,
+} from "./alerts-fast-ci";
+
+function event(overrides: Partial<FastFailureEvent> = {}): FastFailureEvent {
+  return {
+    buildkiteJobId: "job-1",
+    jobName: "Async engine test",
+    jobUrl: "https://buildkite.com/vllm/ci/builds/9001#job-1",
+    state: "failed",
+    softFailed: false,
+    durationSeconds: 4,
+    finishedAt: "2026-08-27T10:00:00.000Z",
+    buildUrl: "https://buildkite.com/vllm/ci/builds/9001",
+    message: "Add paged attention kernel",
+    commitSha: "1f4c9a2b7d3e5f6a8b9c0d1e2f3a4b5c6d7e8f90",
+    branch: "main",
+    author: "a-maintainer",
+    prNumber: null,
+    pipeline: "ci",
+    notificationStatuses: ["delivered"],
+    ...overrides,
+  };
+}
+
+test("an event with no outbox row reads as unnotified", () => {
+  assert.equal(notificationStateFor([]), "unnotified");
+});
+
+test("delivery to Slack outranks the attempts that preceded it", () => {
+  assert.equal(notificationStateFor(["retrying", "delivered"]), "delivered");
+});
+
+test("an undelivered event reports its worst outstanding attempt", () => {
+  assert.equal(notificationStateFor(["pending", "dead_letter"]), "dead_letter");
+  assert.equal(notificationStateFor(["pending", "retrying"]), "retrying");
+  assert.equal(notificationStateFor(["pending"]), "pending");
+});
+
+test("jobs from one build and commit read as a single cluster", () => {
+  const groups = groupFastFailureEvents([
+    event({
+      buildkiteJobId: "job-1",
+      jobName: "Async engine test",
+      finishedAt: "2026-08-27T10:00:00.000Z",
+    }),
+    event({
+      buildkiteJobId: "job-2",
+      jobName: "Entrypoints test",
+      finishedAt: "2026-08-27T10:04:00.000Z",
+    }),
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].buildUrl, "https://buildkite.com/vllm/ci/builds/9001");
+  assert.equal(
+    groups[0].commitSha,
+    "1f4c9a2b7d3e5f6a8b9c0d1e2f3a4b5c6d7e8f90",
+  );
+  assert.deepEqual(
+    groups[0].events.map((e) => e.jobName),
+    ["Entrypoints test", "Async engine test"],
+  );
+});
+
+test("a retried build separates from the original run of the same commit", () => {
+  const groups = groupFastFailureEvents([
+    event({
+      buildkiteJobId: "job-1",
+      buildUrl: "https://buildkite.com/vllm/ci/builds/9001",
+      finishedAt: "2026-08-27T10:00:00.000Z",
+    }),
+    event({
+      buildkiteJobId: "job-2",
+      buildUrl: "https://buildkite.com/vllm/ci/builds/9002",
+      finishedAt: "2026-08-27T11:00:00.000Z",
+    }),
+  ]);
+
+  assert.deepEqual(
+    groups.map((group) => group.buildUrl),
+    [
+      "https://buildkite.com/vllm/ci/builds/9002",
+      "https://buildkite.com/vllm/ci/builds/9001",
+    ],
+  );
+});
+
+test("a rebuilt commit and a fresh commit stay distinct clusters", () => {
+  const groups = groupFastFailureEvents([
+    event({
+      buildkiteJobId: "job-1",
+      commitSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }),
+    event({
+      buildkiteJobId: "job-2",
+      commitSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }),
+  ]);
+
+  assert.equal(groups.length, 2);
+});
+
+test("GitHub links resolve from the commit and pull request an event recorded", () => {
+  assert.equal(
+    commitUrl("1f4c9a2b7d3e5f6a8b9c0d1e2f3a4b5c6d7e8f90"),
+    "https://github.com/vllm-project/vllm/commit/1f4c9a2b7d3e5f6a8b9c0d1e2f3a4b5c6d7e8f90",
+  );
+  assert.equal(
+    pullRequestUrl("24680"),
+    "https://github.com/vllm-project/vllm/pull/24680",
+  );
+  assert.equal(pullRequestUrl(null), null);
+});
+
+test("each event carries its own notification state", () => {
+  const [group] = groupFastFailureEvents([
+    event({ buildkiteJobId: "job-1", notificationStatuses: [] }),
+    event({
+      buildkiteJobId: "job-2",
+      notificationStatuses: ["pending", "dead_letter"],
+      finishedAt: "2026-08-27T10:05:00.000Z",
+    }),
+  ]);
+
+  assert.deepEqual(
+    group.events.map((e) => e.notificationState),
+    ["dead_letter", "unnotified"],
+  );
+});
