@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from alerting.commands import Command
-from alerting.ports import Clock
+from alerting.ports import Clock, DeliveryMode
 from alerting.postgres import (
     build_fast_ci_runtime,
     build_full_ci_analysis_runtime,
@@ -42,7 +42,19 @@ def _slack() -> SlackDeliveryPort:
     )
 
 
-def _runtime(consumer: str, clock: Clock) -> AlertingRuntime:
+def _delivery_mode() -> DeliveryMode:
+    raw = os.environ.get("ALERTING_DELIVERY_MODE", DeliveryMode.SHADOW.value)
+    try:
+        return DeliveryMode(raw)
+    except ValueError as exc:
+        raise RuntimeError("ALERTING_DELIVERY_MODE must be 'shadow' or 'live'") from exc
+
+
+def _runtime(
+    consumer: str,
+    clock: Clock,
+    delivery_mode: DeliveryMode,
+) -> AlertingRuntime:
     database_url = _required_environment("DATABASE_URL")
     if consumer == "fast-ci":
         return build_fast_ci_runtime(
@@ -52,6 +64,7 @@ def _runtime(consumer: str, clock: Clock) -> AlertingRuntime:
             databricks_warehouse_id=_required_environment("DATABRICKS_WAREHOUSE_ID"),
             slack=_slack(),
             clock=clock,
+            delivery_mode=delivery_mode,
         )
     if consumer == "full-ci":
         return build_full_ci_runtime(
@@ -59,15 +72,17 @@ def _runtime(consumer: str, clock: Clock) -> AlertingRuntime:
             buildkite_token=_required_environment("BUILDKITE_TOKEN"),
             slack=_slack(),
             clock=clock,
+            delivery_mode=delivery_mode,
         )
     if consumer == "full-ci-analyze":
         return build_full_ci_analysis_runtime(
             database_url=database_url,
             buildkite_token=_required_environment("BUILDKITE_TOKEN"),
             github_token=_required_environment("GITHUB_TOKEN"),
-            checkpoint_bucket=_required_environment("ANALYZER_CHECKPOINT_BUCKET"),
+            checkpoint_bucket=_required_environment("ALERTING_CHECKPOINT_BUCKET"),
             slack=_slack(),
             clock=clock,
+            delivery_mode=delivery_mode,
         )
     raise ValueError(f"unknown consumer: {consumer}")
 
@@ -96,7 +111,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     consumer = args[0]
     clock = SystemClock()
-    runtime = _runtime(consumer, clock)
+    runtime = _runtime(consumer, clock, _delivery_mode())
     result = runtime.process_command(scheduled_command(consumer, clock.now()))
     runtime.dispatch_due_notifications()
     return 1 if result.status is ProcessStatus.FAILED else 0

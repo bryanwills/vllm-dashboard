@@ -56,6 +56,11 @@ repository-level relationship with the dashboard is recorded in
 - `migration.py` — the read-only-by-default one-time cutover importer for the
   legacy Full CI cache, last-reported build state, analyzer memory, and Fast CI
   SQLite deduplication keys.
+- `control.py` — applies durable per-path `shadow`, `live`, or `disabled`
+  controls from S3 to the two systemd timers. Missing controls default to
+  `shadow`.
+- `cutover.py` — exports persisted shadow payloads for comparison and archives
+  pending live payloads as non-deliverable shadow records during rollback.
 - `postgres.py` — production execution, outbox, Fast CI, and Full CI
   stores.
   `PostgresAlertStore.commit_scan` performs the event inserts, batch inserts,
@@ -98,6 +103,18 @@ for the new scanner. A failed Postgres commit can leave an unreferenced S3
 object; it does not change the authoritative baseline. Re-running the same
 import is idempotent, while different Full CI baseline data is rejected.
 
+## Shadow mode and cutover
+
+Every notification intent records its alert path and whether it was rendered
+in `shadow` or `live` mode. Dispatch leasing selects only live records for the
+runtime's own path, so a Fast CI cutover cannot release Full CI output and a
+later mode change cannot release historical shadow output.
+
+Use [`deploy/aws/cutover-wizard.sh`](../deploy/aws/cutover-wizard.sh) for both
+cutover and rollback. It keeps control metadata under the checkpoint bucket,
+requires confirmation before each external change, fences the old path before
+enabling the new path, and preserves Postgres and S3 baselines on rollback.
+
 ## Extension points (later tickets)
 
 - `FastCIScanHandler` registers as `fast_ci_scan`,
@@ -121,6 +138,6 @@ import is idempotent, while different Full CI baseline data is rejected.
 cd alerting
 uv sync --extra dev
 uv run pytest
-uv run mypy __init__.py analyzer.py commands.py fast_ci.py full_ci.py memory.py migration.py ports.py postgres.py runtime.py slack.py worker.py tests
+uv run mypy __init__.py analyzer.py commands.py control.py cutover.py fast_ci.py full_ci.py memory.py migration.py ports.py postgres.py runtime.py slack.py worker.py tests
 uv run ruff check .
 ```

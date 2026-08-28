@@ -24,6 +24,11 @@ instance role, writes them briefly under `/run/alerting`, removes the file
 before starting Python, and suppresses worker stdout and stderr so credentials,
 CI logs, model output, and Slack payloads do not enter the journal.
 
+The installer also installs the Claude Code CLI under the non-login `alerting`
+user. The Full CI analyzer uses the LLM credential from `WorkerSecretArn`, a
+bundled read-only analyzer definition, and the stack checkpoint bucket. It does
+not receive a GitHub write credential.
+
 ## Deploy
 
 ```bash
@@ -40,6 +45,28 @@ aws cloudformation deploy \
 
 `RepositoryRef` defaults to `main`; set it to the reviewed deployment branch
 when validating before merge.
+
+## Shadow, cutover, and rollback
+
+Both paths start in shadow mode. Durable controls live at
+`s3://CHECKPOINT_BUCKET/control/fast_ci.mode` and
+`s3://CHECKPOINT_BUCKET/control/full_ci.mode`; allowed values are `shadow`,
+`live`, and `disabled`. A root oneshot reconciles those objects every minute,
+but workers run as the non-login `alerting` user. Shadow runs persist source
+observations and rendered Slack payloads without leasing them for delivery.
+
+Run the repeatable operator wizard from the repository root:
+
+```bash
+export DATABASE_URL='postgresql://...'
+deploy/aws/cutover-wizard.sh
+```
+
+Cutover is path-specific. Fast CI fences only
+`vllm-fast-ci-failure-alert.timer`; Full CI requires disabling only its task in
+the shared legacy scheduler. Rollback disables the selected new timer through
+S3, archives any undelivered live rows as shadow output, restores only the
+selected old producer, and never rewinds Postgres or S3 state.
 
 ## Recovery check
 

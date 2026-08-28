@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Protocol
 
 from alerting.commands import Command
@@ -49,6 +49,16 @@ class OutboxStatus(Enum):
     DEAD_LETTER = "dead_letter"
 
 
+class AlertPath(StrEnum):
+    FAST_CI = "fast_ci"
+    FULL_CI = "full_ci"
+
+
+class DeliveryMode(StrEnum):
+    LIVE = "live"
+    SHADOW = "shadow"
+
+
 class DestinationMode(Enum):
     WEBHOOK = "webhook"
     BOT_TOKEN = "bot_token"
@@ -65,6 +75,8 @@ class OutboxMessage:
 
     delivery_id: str
     alert_ref: str
+    alert_path: AlertPath
+    delivery_mode: DeliveryMode
     destination_mode: DestinationMode
     destination: str
     payload: dict[str, Any] = field(default_factory=dict)
@@ -76,6 +88,8 @@ class OutboxRecord:
 
     delivery_id: str
     alert_ref: str
+    alert_path: AlertPath
+    delivery_mode: DeliveryMode
     destination_mode: DestinationMode
     destination: str
     payload: dict[str, Any]
@@ -136,7 +150,12 @@ class OutboxStore(Protocol):
         ...
 
     def lease_due(
-        self, *, now: datetime, lease_until: datetime, limit: int
+        self,
+        *,
+        now: datetime,
+        lease_until: datetime,
+        limit: int,
+        alert_path: AlertPath | None = None,
     ) -> list[OutboxRecord]:
         """Lease up to `limit` due pending/retrying records until `lease_until`.
 

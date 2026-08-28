@@ -36,6 +36,7 @@ from alerting.full_ci import (
     ordered_unique_runs,
 )
 from alerting.ports import (
+    AlertPath,
     ClaimOutcome,
     ExecutionRecord,
     ExecutionStatus,
@@ -150,6 +151,8 @@ class InMemoryOutboxStore:
         self._records[message.delivery_id] = OutboxRecord(
             delivery_id=message.delivery_id,
             alert_ref=message.alert_ref,
+            alert_path=message.alert_path,
+            delivery_mode=message.delivery_mode,
             destination_mode=message.destination_mode,
             destination=message.destination,
             payload=dict(message.payload),
@@ -160,12 +163,19 @@ class InMemoryOutboxStore:
         )
 
     def lease_due(
-        self, *, now: datetime, lease_until: datetime, limit: int
+        self,
+        *,
+        now: datetime,
+        lease_until: datetime,
+        limit: int,
+        alert_path: AlertPath | None = None,
     ) -> list[OutboxRecord]:
         due = [
             record
             for record in self._records.values()
             if record.status in (OutboxStatus.PENDING, OutboxStatus.RETRYING)
+            and record.delivery_mode.value == "live"
+            and (alert_path is None or record.alert_path is alert_path)
             and record.superseded_by is None
             and record.next_attempt_at <= now
             and (record.lease_expires_at is None or record.lease_expires_at <= now)
@@ -258,7 +268,10 @@ class InMemoryFastCIStore:
         try:
             new_events: list[FastFailureEvent] = []
             for event in ordered_unique_events(observations):
-                if event.job_id in self._events or event.job_id in self._imported_job_ids:
+                if (
+                    event.job_id in self._events
+                    or event.job_id in self._imported_job_ids
+                ):
                     continue
                 new_events.append(event)
                 self._events[event.job_id] = event

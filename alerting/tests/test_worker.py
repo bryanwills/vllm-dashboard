@@ -6,6 +6,7 @@ import pytest
 
 from alerting import worker
 from alerting.commands import Command
+from alerting.ports import Clock, DeliveryMode
 from alerting.runtime import DispatchResult, ProcessResult, ProcessStatus
 
 
@@ -27,7 +28,18 @@ def test_timer_worker_dispatches_notifications_after_reconciliation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = RecordingRuntime()
-    monkeypatch.setattr(worker, "_runtime", lambda consumer, clock: runtime)
+    observed_modes: list[DeliveryMode] = []
+
+    def recording_runtime(
+        consumer: str,
+        clock: Clock,
+        delivery_mode: DeliveryMode,
+    ) -> RecordingRuntime:
+        observed_modes.append(delivery_mode)
+        return runtime
+
+    monkeypatch.delenv("ALERTING_DELIVERY_MODE", raising=False)
+    monkeypatch.setattr(worker, "_runtime", recording_runtime)
     monkeypatch.setattr(
         worker.SystemClock,
         "now",
@@ -37,3 +49,25 @@ def test_timer_worker_dispatches_notifications_after_reconciliation(
     assert worker.main(["fast-ci"]) == 0
     assert [command.command_type for command in runtime.commands] == ["fast_ci_scan"]
     assert runtime.dispatches == 1
+    assert observed_modes == [DeliveryMode.SHADOW]
+
+
+def test_timer_worker_uses_explicit_live_delivery_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = RecordingRuntime()
+    observed_modes: list[DeliveryMode] = []
+
+    def recording_runtime(
+        consumer: str,
+        clock: Clock,
+        delivery_mode: DeliveryMode,
+    ) -> RecordingRuntime:
+        observed_modes.append(delivery_mode)
+        return runtime
+
+    monkeypatch.setenv("ALERTING_DELIVERY_MODE", "live")
+    monkeypatch.setattr(worker, "_runtime", recording_runtime)
+
+    assert worker.main(["full-ci-analyze"]) == 0
+    assert observed_modes == [DeliveryMode.LIVE]

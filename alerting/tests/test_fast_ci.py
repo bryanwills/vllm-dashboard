@@ -18,7 +18,7 @@ from alerting.memory import (
     InMemoryOutboxStore,
     RecordingSlackPort,
 )
-from alerting.ports import ExecutionStatus, OutboxRecord, OutboxStatus
+from alerting.ports import DeliveryMode, ExecutionStatus, OutboxRecord, OutboxStatus
 from alerting.runtime import AlertingRuntime, ProcessStatus
 
 START = datetime(2026, 8, 27, 19, 0, tzinfo=timezone.utc)
@@ -75,6 +75,7 @@ def make_runtime(
     *,
     slack: RecordingSlackPort | UnavailableSlackPort | None = None,
     clock: FixedClock | None = None,
+    delivery_mode: DeliveryMode = DeliveryMode.LIVE,
 ) -> tuple[
     AlertingRuntime,
     InMemoryExecutionStore,
@@ -85,7 +86,12 @@ def make_runtime(
     executions = InMemoryExecutionStore()
     outbox = InMemoryOutboxStore()
     fast_ci = InMemoryFastCIStore(executions=executions, outbox=outbox)
-    handler = FastCIScanHandler(source=source, store=fast_ci, clock=clock)
+    handler = FastCIScanHandler(
+        source=source,
+        store=fast_ci,
+        clock=clock,
+        delivery_mode=delivery_mode,
+    )
     runtime = AlertingRuntime(
         executions=executions,
         outbox=outbox,
@@ -226,7 +232,9 @@ def test_imported_legacy_job_id_is_not_reposted() -> None:
     fast_ci.seed_imported_job_ids({"already-alerted"})
 
     assert (
-        runtime.process_command(Command(command_type="fast_ci_scan", target_time=START)).status
+        runtime.process_command(
+            Command(command_type="fast_ci_scan", target_time=START)
+        ).status
         is ProcessStatus.COMPLETED
     )
 
@@ -287,6 +295,26 @@ def test_scan_persists_event_and_outbox_while_slack_is_unavailable() -> None:
     assert result.status is ProcessStatus.COMPLETED
     assert len(fast_ci.events()) == 1
     assert outbox.records()[0].status is OutboxStatus.PENDING
+
+
+def test_shadow_scan_persists_rendered_output_without_slack_delivery() -> None:
+    source = FixtureFastCISource([event("job-1")])
+    slack = RecordingSlackPort()
+    runtime, _, outbox, _ = make_runtime(
+        source,
+        slack=slack,
+        delivery_mode=DeliveryMode.SHADOW,
+    )
+
+    runtime.process_command(Command(command_type="fast_ci_scan", target_time=START))
+    result = runtime.dispatch_due_notifications()
+
+    assert result.delivered == 0
+    records = outbox.records()
+    assert len(records) == 1
+    assert records[0].delivery_mode is DeliveryMode.SHADOW
+    assert "Fast CI job failure alert" in records[0].payload["text"]
+    assert slack.deliveries == []
 
 
 def test_failed_transaction_cannot_advance_cursor_past_unrecorded_event() -> None:

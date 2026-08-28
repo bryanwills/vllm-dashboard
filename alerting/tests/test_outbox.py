@@ -15,6 +15,8 @@ from alerting.memory import (
     RecordingSlackPort,
 )
 from alerting.ports import (
+    AlertPath,
+    DeliveryMode,
     DestinationMode,
     OutboxMessage,
     OutboxRecord,
@@ -41,10 +43,17 @@ class AcceptThenCrashSlackPort:
         raise SimulatedWorkerCrash
 
 
-def make_message(delivery_id: str = "fast-ci:batch-1") -> OutboxMessage:
+def make_message(
+    delivery_id: str = "fast-ci:batch-1",
+    *,
+    alert_path: AlertPath = AlertPath.FAST_CI,
+    delivery_mode: DeliveryMode = DeliveryMode.LIVE,
+) -> OutboxMessage:
     return OutboxMessage(
         delivery_id=delivery_id,
         alert_ref="fast_failure_event:12345",
+        alert_path=alert_path,
+        delivery_mode=delivery_mode,
         destination_mode=DestinationMode.BOT_TOKEN,
         destination="C0ANHBE642Y",
         payload={"text": "8 jobs failed within 30s"},
@@ -52,7 +61,11 @@ def make_message(delivery_id: str = "fast-ci:batch-1") -> OutboxMessage:
 
 
 def make_runtime(
-    outbox: InMemoryOutboxStore, slack: SlackPort, clock: FixedClock
+    outbox: InMemoryOutboxStore,
+    slack: SlackPort,
+    clock: FixedClock,
+    *,
+    alert_path: AlertPath | None = None,
 ) -> AlertingRuntime:
     return AlertingRuntime(
         executions=InMemoryExecutionStore(),
@@ -60,6 +73,7 @@ def make_runtime(
         slack=slack,
         clock=clock,
         handlers={},
+        alert_path=alert_path,
     )
 
 
@@ -79,6 +93,52 @@ def test_due_pending_record_is_delivered_with_slack_ts() -> None:
     assert record.slack_ts == "1724900000.001"
     assert record.attempts == 1
     assert [r.delivery_id for r in slack.deliveries] == ["fast-ci:batch-1"]
+
+
+def test_shadow_record_is_persisted_but_never_delivered() -> None:
+    outbox = InMemoryOutboxStore()
+    slack = RecordingSlackPort()
+    clock = FixedClock(START)
+    runtime = make_runtime(outbox, slack, clock)
+    outbox.enqueue(
+        make_message(delivery_mode=DeliveryMode.SHADOW),
+        now=clock.now(),
+    )
+
+    result = runtime.dispatch_due_notifications()
+
+    assert result.delivered == 0
+    record = outbox.get_outbox("fast-ci:batch-1")
+    assert record is not None
+    assert record.status is OutboxStatus.PENDING
+    assert record.delivery_mode is DeliveryMode.SHADOW
+    assert record.payload == {"text": "8 jobs failed within 30s"}
+    assert slack.deliveries == []
+
+
+def test_dispatch_is_isolated_to_one_alert_path() -> None:
+    outbox = InMemoryOutboxStore()
+    slack = RecordingSlackPort()
+    clock = FixedClock(START)
+    runtime = make_runtime(
+        outbox,
+        slack,
+        clock,
+        alert_path=AlertPath.FAST_CI,
+    )
+    outbox.enqueue(make_message("fast-ci:1"), now=clock.now())
+    outbox.enqueue(
+        make_message("full-ci:1", alert_path=AlertPath.FULL_CI),
+        now=clock.now(),
+    )
+
+    result = runtime.dispatch_due_notifications()
+
+    assert result.delivered == 1
+    assert [record.delivery_id for record in slack.deliveries] == ["fast-ci:1"]
+    full_ci = outbox.get_outbox("full-ci:1")
+    assert full_ci is not None
+    assert full_ci.status is OutboxStatus.PENDING
 
 
 def test_delivered_record_is_never_redelivered() -> None:
@@ -212,6 +272,8 @@ def test_duplicate_enqueue_is_a_noop() -> None:
     duplicate = OutboxMessage(
         delivery_id="fast-ci:batch-1",
         alert_ref="fast_failure_event:12345",
+        alert_path=AlertPath.FAST_CI,
+        delivery_mode=DeliveryMode.LIVE,
         destination_mode=DestinationMode.BOT_TOKEN,
         destination="C0ANHBE642Y",
         payload={"text": "different payload"},

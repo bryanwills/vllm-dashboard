@@ -278,7 +278,8 @@ def test_postgres_consolidates_stale_fast_ci_batches_and_links_every_event() -> 
     assert len(connection.state["outbox"]) == 1
     summary_id, summary = next(iter(connection.state["outbox"].items()))
     assert summary_id.startswith("fast-ci-recovery:")
-    payload = json.loads(summary[4])
+    assert summary[2:4] == ("fast_ci", "live")
+    payload = json.loads(summary[6])
     assert "Fast CI recovery summary" in payload["text"]
     assert payload["text"].count(":red_circle:") == 10
     assert len(connection.state["notifications"]) == 10

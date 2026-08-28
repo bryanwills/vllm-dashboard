@@ -34,8 +34,10 @@ from alerting.full_ci import (
     ordered_unique_runs,
 )
 from alerting.ports import (
+    AlertPath,
     ClaimOutcome,
     Clock,
+    DeliveryMode,
     DestinationMode,
     ExecutionRecord,
     ExecutionStatus,
@@ -193,14 +195,16 @@ class PostgresAlertStore:
         connection.execute(
             """
             INSERT INTO alerting_notification_outbox (
-                delivery_id, alert_ref, destination_mode, destination,
-                payload, next_attempt_at
-            ) VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+                delivery_id, alert_ref, alert_path, delivery_mode,
+                destination_mode, destination, payload, next_attempt_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             ON CONFLICT (delivery_id) DO NOTHING
             """,
             (
                 message.delivery_id,
                 message.alert_ref,
+                message.alert_path.value,
+                message.delivery_mode.value,
                 message.destination_mode.value,
                 message.destination,
                 json.dumps(message.payload),
@@ -209,7 +213,12 @@ class PostgresAlertStore:
         )
 
     def lease_due(
-        self, *, now: datetime, lease_until: datetime, limit: int
+        self,
+        *,
+        now: datetime,
+        lease_until: datetime,
+        limit: int,
+        alert_path: AlertPath | None = None,
     ) -> list[OutboxRecord]:
         with self._connection_factory() as connection:
             with connection.transaction():
@@ -219,6 +228,8 @@ class PostgresAlertStore:
                         SELECT delivery_id
                         FROM alerting_notification_outbox
                         WHERE status IN ('pending', 'retrying')
+                          AND delivery_mode = 'live'
+                          AND (%s IS NULL OR alert_path = %s)
                           AND superseded_by IS NULL
                           AND next_attempt_at <= %s
                           AND (lease_expires_at IS NULL OR lease_expires_at <= %s)
@@ -231,13 +242,21 @@ class PostgresAlertStore:
                     FROM due
                     WHERE outbox.delivery_id = due.delivery_id
                     RETURNING outbox.delivery_id, outbox.alert_ref,
+                              outbox.alert_path, outbox.delivery_mode,
                               outbox.destination_mode, outbox.destination,
                               outbox.payload, outbox.status, outbox.attempts,
                               outbox.next_attempt_at, outbox.lease_expires_at,
                               outbox.slack_ts, outbox.last_error,
                               outbox.created_at, outbox.superseded_by
                     """,
-                    (now, now, limit, lease_until),
+                    (
+                        alert_path.value if alert_path is not None else None,
+                        alert_path.value if alert_path is not None else None,
+                        now,
+                        now,
+                        limit,
+                        lease_until,
+                    ),
                 ).fetchall()
         return [self._outbox_record(row) for row in rows]
 
@@ -246,17 +265,19 @@ class PostgresAlertStore:
         return OutboxRecord(
             delivery_id=row[0],
             alert_ref=row[1],
-            destination_mode=DestinationMode(row[2]),
-            destination=row[3],
-            payload=dict(row[4]),
-            status=OutboxStatus(row[5]),
-            attempts=row[6],
-            next_attempt_at=row[7],
-            created_at=row[11],
-            lease_expires_at=row[8],
-            slack_ts=row[9],
-            last_error=row[10],
-            superseded_by=row[12],
+            alert_path=AlertPath(row[2]),
+            delivery_mode=DeliveryMode(row[3]),
+            destination_mode=DestinationMode(row[4]),
+            destination=row[5],
+            payload=dict(row[6]),
+            status=OutboxStatus(row[7]),
+            attempts=row[8],
+            next_attempt_at=row[9],
+            created_at=row[13],
+            lease_expires_at=row[10],
+            slack_ts=row[11],
+            last_error=row[12],
+            superseded_by=row[14],
         )
 
     def mark_delivered(
@@ -320,7 +341,8 @@ class PostgresAlertStore:
         with self._connection_factory() as connection:
             row = connection.execute(
                 """
-                SELECT delivery_id, alert_ref, destination_mode, destination,
+                SELECT delivery_id, alert_ref, alert_path, delivery_mode,
+                       destination_mode, destination,
                        payload, status, attempts, next_attempt_at,
                        lease_expires_at, slack_ts, last_error, created_at,
                        superseded_by
@@ -330,6 +352,39 @@ class PostgresAlertStore:
                 (delivery_id,),
             ).fetchone()
         return self._outbox_record(row) if row is not None else None
+
+    def shadow_outputs(
+        self, *, alert_path: AlertPath, limit: int
+    ) -> list[OutboxRecord]:
+        with self._connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT delivery_id, alert_ref, alert_path, delivery_mode,
+                       destination_mode, destination, payload, status, attempts,
+                       next_attempt_at, lease_expires_at, slack_ts, last_error,
+                       created_at, superseded_by
+                FROM alerting_notification_outbox
+                WHERE alert_path = %s AND delivery_mode = 'shadow'
+                ORDER BY created_at DESC, delivery_id DESC
+                LIMIT %s
+                """,
+                (alert_path.value, limit),
+            ).fetchall()
+        return [self._outbox_record(row) for row in rows]
+
+    def archive_pending_live(self, *, alert_path: AlertPath) -> int:
+        with self._connection_factory() as connection:
+            result = connection.execute(
+                """
+                UPDATE alerting_notification_outbox
+                SET delivery_mode = 'shadow', lease_expires_at = NULL
+                WHERE alert_path = %s
+                  AND delivery_mode = 'live'
+                  AND status IN ('pending', 'retrying')
+                """,
+                (alert_path.value,),
+            )
+        return int(result.rowcount)
 
     def consolidate_stale_notifications(self, *, now: datetime) -> None:
         stale_before = now - STALE_NOTIFICATION_AGE
@@ -341,6 +396,7 @@ class PostgresAlertStore:
                         SELECT outbox.delivery_id
                         FROM alerting_notification_outbox AS outbox
                         WHERE outbox.status IN ('pending', 'retrying')
+                          AND outbox.delivery_mode = 'live'
                           AND outbox.superseded_by IS NULL
                           AND outbox.created_at <= %s
                           AND (
@@ -598,10 +654,7 @@ class PostgresAlertStore:
                         ) VALUES (%s, %s, %s)
                         ON CONFLICT (buildkite_job_id) DO NOTHING
                         """,
-                        [
-                            (job.job_id, job.finished_at, now)
-                            for job in fast_ci_jobs
-                        ],
+                        [(job.job_id, job.finished_at, now) for job in fast_ci_jobs],
                     )
 
     def commit_scan(
@@ -1077,6 +1130,7 @@ def build_fast_ci_runtime(
     databricks_warehouse_id: str,
     slack: SlackPort,
     clock: Clock,
+    delivery_mode: DeliveryMode = DeliveryMode.LIVE,
 ) -> AlertingRuntime:
     """Wire production Fast CI source and Postgres state into the runtime."""
     from alerting.fast_ci import (
@@ -1093,7 +1147,12 @@ def build_fast_ci_runtime(
             warehouse_id=databricks_warehouse_id,
         )
     )
-    handler = FastCIScanHandler(source=source, store=store, clock=clock)
+    handler = FastCIScanHandler(
+        source=source,
+        store=store,
+        clock=clock,
+        delivery_mode=delivery_mode,
+    )
     return AlertingRuntime(
         executions=store,
         outbox=store,
@@ -1101,6 +1160,7 @@ def build_fast_ci_runtime(
         clock=clock,
         handlers={"fast_ci_scan": handler},
         stale_notifications=store,
+        alert_path=AlertPath.FAST_CI,
     )
 
 
@@ -1110,6 +1170,7 @@ def build_full_ci_runtime(
     buildkite_token: str,
     slack: SlackPort,
     clock: Clock,
+    delivery_mode: DeliveryMode = DeliveryMode.LIVE,
 ) -> AlertingRuntime:
     """Wire production Full CI source and Postgres state into the runtime."""
     from alerting.full_ci import (
@@ -1127,6 +1188,7 @@ def build_full_ci_runtime(
         slack=slack,
         clock=clock,
         handlers={"full_ci_reconcile": handler},
+        alert_path=AlertPath.FULL_CI,
     )
 
 
@@ -1139,6 +1201,7 @@ def build_full_ci_analysis_runtime(
     slack: SlackPort,
     clock: Clock,
     runner: AnalyzerRunner | None = None,
+    delivery_mode: DeliveryMode = DeliveryMode.LIVE,
 ) -> AlertingRuntime:
     """Wire the production analyzer compatibility adapter into the runtime."""
     from alerting.analyzer import (
@@ -1157,6 +1220,7 @@ def build_full_ci_analysis_runtime(
         checkpoints=S3CheckpointStore(bucket=checkpoint_bucket),
         github=GitHubRestClient(token=github_token),
         clock=clock,
+        delivery_mode=delivery_mode,
     )
     return AlertingRuntime(
         executions=store,
@@ -1165,4 +1229,5 @@ def build_full_ci_analysis_runtime(
         clock=clock,
         handlers={"full_ci_analyze": handler},
         stale_notifications=store,
+        alert_path=AlertPath.FULL_CI,
     )

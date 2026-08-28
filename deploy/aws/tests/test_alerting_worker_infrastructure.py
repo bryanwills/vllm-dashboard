@@ -25,6 +25,8 @@ def test_stack_provisions_one_disposable_worker_without_deferred_services() -> N
     assert "DeleteOnTermination: true" in template
     assert "HttpTokens: required" in template
     assert "SecurityGroupIngress" not in template
+    assert "nodejs22" in template
+    assert "nodejs22-npm" in template
 
 
 def test_instance_role_is_scoped_to_checkpoint_bucket_and_named_secrets() -> None:
@@ -69,6 +71,7 @@ def test_consumers_are_independent_and_units_never_contain_sensitive_data() -> N
     )
 
     assert "run-worker full-ci" in full_service
+    assert "run-worker full-ci-analyze" in full_service
     assert "run-worker fast-ci" in fast_service
     assert "StandardOutput=null" in full_service
     assert "StandardError=null" in full_service
@@ -94,15 +97,46 @@ def test_runtime_loads_secrets_non_interactively_into_ephemeral_storage() -> Non
     assert "/run/alerting" in runner
     assert "load-secrets" in runner
     assert "rm -f" in runner
+    assert 'mode_path="/run/alerting/${alert_path}.mode"' in runner
+    assert 'source "$mode_path"' in runner
 
 
-def test_installation_creates_a_non_login_user_and_separate_timers() -> None:
+def test_installation_creates_a_non_login_user_and_s3_controlled_timers() -> None:
     installer = read("install.sh")
 
     assert "useradd --system" in installer
     assert "--shell /sbin/nologin" in installer
-    assert "systemctl enable --now alerting-full-ci.timer" in installer
-    assert "systemctl enable --now alerting-fast-ci.timer" in installer
+    assert 'alerting[aws,postgres]' in installer
+    assert "@anthropic-ai/claude-code" in installer
+    assert "runuser -u alerting" in installer
+    assert "systemctl start alerting-control.service" in installer
+    assert "systemctl enable --now alerting-control.timer" in installer
+    assert "systemctl enable --now alerting-full-ci.timer" not in installer
+    assert "systemctl enable --now alerting-fast-ci.timer" not in installer
+
+
+def test_s3_control_reconciles_each_path_without_cloudwatch_or_sqs() -> None:
+    service = read("systemd/alerting-control.service")
+    timer = read("systemd/alerting-control.timer")
+    template = read("alerting-worker.yaml")
+
+    assert "alerting.control" in service
+    assert "ALERTING_CHECKPOINT_BUCKET" in service
+    assert "OnUnitActiveSec=1min" in timer
+    assert "AWS::CloudWatch" not in template
+    assert "AWS::SQS" not in template
+
+
+def test_cutover_wizard_fences_only_selected_old_path_and_supports_rollback() -> None:
+    wizard = read("cutover-wizard.sh")
+
+    assert "vllm-fast-ci-failure-alert.timer" in wizard
+    assert "/home/ubuntu/vllm-ci-report/tasks/vllm-ci-report.yaml" in wizard
+    assert "vllm-nightly-perf-trigger.timer" not in wizard
+    assert "archive-pending" in wizard
+    assert "export-shadow" in wizard
+    assert "control/${ALERT_PATH}.mode" in wizard
+    assert "confirm" in wizard
 
 
 def test_deployment_contract_requires_a_read_only_github_credential() -> None:

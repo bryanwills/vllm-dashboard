@@ -1,0 +1,12 @@
+[Unit]
+Description=Reconcile vLLM alerting path controls
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+Persistent=true
+AccuracySec=10s
+Unit=alerting-control.service
+
+[Install]
+WantedBy=timers.target

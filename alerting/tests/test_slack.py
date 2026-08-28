@@ -6,6 +6,8 @@ from typing import Any, Mapping
 import pytest
 
 from alerting.ports import (
+    AlertPath,
+    DeliveryMode,
     DestinationMode,
     OutboxRecord,
     OutboxStatus,
@@ -39,6 +41,8 @@ def make_record(
     return OutboxRecord(
         delivery_id="fast-ci:batch-1",
         alert_ref="fast_failure_event:12345",
+        alert_path=AlertPath.FAST_CI,
+        delivery_mode=DeliveryMode.LIVE,
         destination_mode=mode,
         destination=destination,
         payload={"text": "8 jobs failed within 30s"},
@@ -157,7 +161,12 @@ def test_missing_destination_configuration_is_permanent(
 @pytest.mark.parametrize(
     ("mode", "status", "body", "expected_error"),
     [
-        (DestinationMode.BOT_TOKEN, 200, b'{"ok":false,"error":"invalid_blocks"}', "invalid_blocks"),
+        (
+            DestinationMode.BOT_TOKEN,
+            200,
+            b'{"ok":false,"error":"invalid_blocks"}',
+            "invalid_blocks",
+        ),
         (DestinationMode.WEBHOOK, 400, b"invalid_payload", "invalid_payload"),
     ],
 )

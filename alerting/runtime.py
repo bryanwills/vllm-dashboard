@@ -12,6 +12,7 @@ from typing import Protocol
 
 from alerting.commands import Command
 from alerting.ports import (
+    AlertPath,
     ClaimOutcome,
     Clock,
     ExecutionStore,
@@ -94,6 +95,7 @@ class AlertingRuntime:
         dispatch_lease: timedelta = DEFAULT_DISPATCH_LEASE,
         max_delivery_attempts: int = DEFAULT_MAX_DELIVERY_ATTEMPTS,
         stale_notifications: StaleNotificationConsolidator | None = None,
+        alert_path: AlertPath | None = None,
     ) -> None:
         self._executions = executions
         self._outbox = outbox
@@ -104,6 +106,7 @@ class AlertingRuntime:
         self._dispatch_lease = dispatch_lease
         self._max_delivery_attempts = max_delivery_attempts
         self._stale_notifications = stale_notifications
+        self._alert_path = alert_path
 
     def process_command(self, command: Command) -> ProcessResult:
         handler = self._handlers.get(command.command_type)
@@ -134,7 +137,10 @@ class AlertingRuntime:
         if self._stale_notifications is not None:
             self._stale_notifications.consolidate_stale_notifications(now=now)
         records = self._outbox.lease_due(
-            now=now, lease_until=now + self._dispatch_lease, limit=limit
+            now=now,
+            lease_until=now + self._dispatch_lease,
+            limit=limit,
+            alert_path=self._alert_path,
         )
         delivered = retried = dead_lettered = 0
         for record in records:

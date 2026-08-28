@@ -36,7 +36,13 @@ from alerting.memory import (
     InMemoryOutboxStore,
     RecordingSlackPort,
 )
-from alerting.ports import DestinationMode, OutboxMessage, OutboxRecord
+from alerting.ports import (
+    AlertPath,
+    DeliveryMode,
+    DestinationMode,
+    OutboxMessage,
+    OutboxRecord,
+)
 from alerting.runtime import AlertingRuntime, ProcessResult, ProcessStatus
 
 START = datetime(2026, 8, 27, 6, 0, tzinfo=timezone.utc)
@@ -219,6 +225,7 @@ class Harness:
         runs: list[FullCIRun],
         builds: dict[int, dict[str, object]],
         seed_checkpoint: bool = True,
+        delivery_mode: DeliveryMode = DeliveryMode.LIVE,
     ) -> None:
         self.clock = FixedClock(START)
         self.executions = InMemoryExecutionStore()
@@ -260,6 +267,7 @@ class Harness:
                     checkpoints=self.checkpoints,
                     github=self.github,
                     clock=self.clock,
+                    delivery_mode=delivery_mode,
                 )
             },
         )
@@ -302,6 +310,8 @@ class Harness:
             notification=OutboxMessage(
                 delivery_id=delivery_id,
                 alert_ref=f"full-ci-comparison:{run.build_id}",
+                alert_path=AlertPath.FULL_CI,
+                delivery_mode=DeliveryMode.LIVE,
                 destination_mode=DestinationMode.WEBHOOK,
                 destination="vllm-ci",
                 payload={"text": "seeded report"},
@@ -422,6 +432,28 @@ def test_analysis_persists_conditions_report_checkpoint_and_notification() -> No
     assert "Job B" in notification.payload["text"]
 
 
+def test_shadow_analysis_persists_report_without_slack_delivery() -> None:
+    run1 = make_run(1, RUN1_AT)
+    run2 = make_run(2, RUN2_AT)
+    harness = Harness(
+        runs=[run1, run2],
+        builds={
+            2: build_json(
+                2,
+                mostly_passing_jobs([("Job A", "failed", False)]),
+                scheduled_at=RUN2_AT,
+            )
+        },
+        delivery_mode=DeliveryMode.SHADOW,
+    )
+
+    assert harness.analyze().status is ProcessStatus.COMPLETED
+    notification = notification_for(harness, run2.build_id)
+    assert notification.delivery_mode is DeliveryMode.SHADOW
+    assert notification.payload["text"] == "*Build:* fine"
+    assert harness.runtime.dispatch_due_notifications().delivered == 0
+
+
 def test_materialized_working_files_match_skill_contract(tmp_path: Path) -> None:
     run1 = make_run(1, RUN1_AT)
     run2 = make_run(2, RUN2_AT)
@@ -447,6 +479,9 @@ def test_materialized_working_files_match_skill_contract(tmp_path: Path) -> None
         observed["cache"] = json.loads((logs / "failed_tests_cache.json").read_text())
         memory = working_dir / ".claude/agent-memory/vllm-ci-failure-analyzer"
         observed["memory"] = (memory / "MEMORY.md").read_text()
+        observed["agent"] = (
+            working_dir / ".claude/agents/vllm-ci-failure-analyzer.md"
+        ).read_text()
         well_behaved(working_dir)
 
     harness.runner.on_run(capture)
@@ -462,6 +497,9 @@ def test_materialized_working_files_match_skill_contract(tmp_path: Path) -> None
     assert "AMD Job" in full_names
     assert observed["cache"]["failed_tests"] == ["Job A"]
     assert observed["memory"] == "# seed memory\n"
+    assert "Phase A" in observed["agent"]
+    assert "Phase D" in observed["agent"]
+    assert "git push" not in observed["agent"]
 
 
 def test_first_comparison_uses_imported_failure_cache_and_checkpoint() -> None:

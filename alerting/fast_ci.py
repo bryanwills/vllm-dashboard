@@ -17,7 +17,13 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from alerting.commands import Command
-from alerting.ports import Clock, DestinationMode, OutboxMessage
+from alerting.ports import (
+    AlertPath,
+    Clock,
+    DeliveryMode,
+    DestinationMode,
+    OutboxMessage,
+)
 from alerting.runtime import HandlerCompletion
 
 INITIAL_LOOKBACK = timedelta(minutes=30)
@@ -354,6 +360,8 @@ def _build_message(
 
 def _notification_batches(
     events: list[FastFailureEvent],
+    *,
+    delivery_mode: DeliveryMode = DeliveryMode.LIVE,
 ) -> list[FastCINotificationBatch]:
     groups = [
         events[index : index + SLACK_BATCH_SIZE]
@@ -369,6 +377,8 @@ def _notification_batches(
                 message=OutboxMessage(
                     delivery_id=delivery_id,
                     alert_ref=delivery_id,
+                    alert_path=AlertPath.FAST_CI,
+                    delivery_mode=delivery_mode,
                     destination_mode=DestinationMode.BOT_TOKEN,
                     destination=FAST_CI_SLACK_CHANNEL,
                     payload={"text": _build_message(group, index, len(groups))},
@@ -389,6 +399,8 @@ def recovery_notification(
         message=OutboxMessage(
             delivery_id=delivery_id,
             alert_ref=delivery_id,
+            alert_path=AlertPath.FAST_CI,
+            delivery_mode=DeliveryMode.LIVE,
             destination_mode=DestinationMode.BOT_TOKEN,
             destination=FAST_CI_SLACK_CHANNEL,
             payload={"text": _build_message(ordered_events, 1, 1, recovery=True)},
@@ -401,11 +413,17 @@ class FastCIScanHandler:
     """Query one cursor window and atomically persist its durable effects."""
 
     def __init__(
-        self, *, source: FastCISource, store: FastCIStore, clock: Clock
+        self,
+        *,
+        source: FastCISource,
+        store: FastCIStore,
+        clock: Clock,
+        delivery_mode: DeliveryMode = DeliveryMode.LIVE,
     ) -> None:
         self._source = source
         self._store = store
         self._clock = clock
+        self._delivery_mode = delivery_mode
 
     def __call__(self, command: Command) -> HandlerCompletion:
         cursor = self._store.scan_cursor()
@@ -424,6 +442,9 @@ class FastCIScanHandler:
             observations=observations,
             scanned_through=command.target_time,
             now=self._clock.now(),
-            batch_factory=_notification_batches,
+            batch_factory=lambda events: _notification_batches(
+                events,
+                delivery_mode=self._delivery_mode,
+            ),
         )
         return HandlerCompletion.TRANSACTIONAL

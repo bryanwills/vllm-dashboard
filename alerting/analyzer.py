@@ -19,6 +19,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+import importlib.resources
 import json
 import re
 import subprocess
@@ -37,7 +38,13 @@ from zoneinfo import ZoneInfo
 
 from alerting.commands import Command, SCHEMA_VERSION
 from alerting.full_ci import FullCIJobOutcome, FullCIRun
-from alerting.ports import Clock, DestinationMode, OutboxMessage
+from alerting.ports import (
+    AlertPath,
+    Clock,
+    DeliveryMode,
+    DestinationMode,
+    OutboxMessage,
+)
 
 COMPLETENESS_THRESHOLD = 0.95
 REPORT_CHAR_LIMIT = 2800
@@ -56,12 +63,14 @@ CACHE_FILE = Path(".logs/failed_tests_cache.json")
 SUSPICIOUS_PRS_FILE = Path(".logs/suspicious_prs.json")
 SUMMARY_FILE = Path(".logs/nightly_summary.json")
 FULL_BUILD_FILE = Path(".logs/nightly_full.json")
+ANALYZER_AGENT_FILE = Path(".claude/agents/vllm-ci-failure-analyzer.md")
 
 DEFAULT_ANALYZER_PROMPT = (
     "Use the Task tool to invoke the vllm-ci-failure-analyzer agent with "
     'subagent_type "vllm-ci-failure-analyzer" and prompt: "Run CI failure '
     "analysis. Read .logs/nightly_summary.json and execute all phases (A "
-    "through E). The BUILDKITE_API_TOKEN is available in the environment. "
+    "through D). Credentials are available only through the environment; "
+    "never include their values in prompts or files. "
     "The full build JSON is at .logs/nightly_full.json for job ID lookups. "
     'REVERT_THRESHOLD is available in the environment (default 1)." Wait for '
     "it to complete, then verify .logs/ci_report.txt was written. If it "
@@ -399,6 +408,13 @@ def _materialize_workdir(
     """Project durable state into the files the unchanged skill expects."""
     _write_json(workdir / FULL_BUILD_FILE, build)
     _write_json(workdir / SUMMARY_FILE, summary)
+    agent = workdir / ANALYZER_AGENT_FILE
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_bytes(
+        importlib.resources.files("alerting")
+        .joinpath("assets/vllm-ci-failure-analyzer.md")
+        .read_bytes()
+    )
     _write_json(
         workdir / CACHE_FILE,
         {
@@ -526,6 +542,7 @@ class FullCIAnalysisHandler:
         checkpoints: CheckpointStore,
         github: GitHubPort,
         clock: Clock,
+        delivery_mode: DeliveryMode = DeliveryMode.LIVE,
     ) -> None:
         self._store = store
         self._builds = builds
@@ -533,6 +550,7 @@ class FullCIAnalysisHandler:
         self._checkpoints = checkpoints
         self._github = github
         self._clock = clock
+        self._delivery_mode = delivery_mode
 
     def __call__(self, command: Command) -> None:
         # Each comparison commits independently, so a crash or failure leaves
@@ -608,6 +626,8 @@ class FullCIAnalysisHandler:
                 notification=OutboxMessage(
                     delivery_id=f"full-ci:{context.current.build_id}",
                     alert_ref=f"full-ci-comparison:{context.current.build_id}",
+                    alert_path=AlertPath.FULL_CI,
+                    delivery_mode=self._delivery_mode,
                     destination_mode=DestinationMode.WEBHOOK,
                     destination=FULL_CI_SLACK_DESTINATION,
                     payload={"text": outputs.report_text},

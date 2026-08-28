@@ -121,8 +121,7 @@ def test_legacy_import_schema_keeps_seed_baseline_and_fast_ci_keys_separate() ->
     assert "failure_cache           jsonb NOT NULL" in sql
     assert "reported_build_numbers  bigint[] NOT NULL" in sql
     assert (
-        "CREATE TABLE IF NOT EXISTS alerting_fast_ci_imported_deduplication_keys"
-        in sql
+        "CREATE TABLE IF NOT EXISTS alerting_fast_ci_imported_deduplication_keys" in sql
     )
     assert "buildkite_job_id text PRIMARY KEY" in sql
     assert "finished_at      timestamptz NOT NULL" in sql
@@ -132,6 +131,16 @@ def test_legacy_import_schema_keeps_seed_baseline_and_fast_ci_keys_separate() ->
         "alerting_fast_ci_imported_deduplication_keys",
     ):
         assert f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY" in sql
+
+
+def test_shadow_delivery_schema_is_path_scoped_and_never_due() -> None:
+    sql = (MIGRATIONS_DIR / "0013_shadow_delivery.sql").read_text()
+
+    assert "ADD COLUMN IF NOT EXISTS alert_path text" in sql
+    assert "ADD COLUMN IF NOT EXISTS delivery_mode text" in sql
+    assert "CHECK (alert_path IN ('fast_ci', 'full_ci'))" in sql
+    assert "CHECK (delivery_mode IN ('live', 'shadow'))" in sql
+    assert "WHERE delivery_mode = 'live'" in sql
 
 
 def test_dashboard_schema_keeps_legacy_additive_columns_and_covering_index() -> None:
