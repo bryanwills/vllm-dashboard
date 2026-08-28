@@ -229,7 +229,7 @@ class PostgresAlertStore:
                         FROM alerting_notification_outbox
                         WHERE status IN ('pending', 'retrying')
                           AND delivery_mode = 'live'
-                          AND (%s IS NULL OR alert_path = %s)
+                          AND (%s::text IS NULL OR alert_path = %s)
                           AND superseded_by IS NULL
                           AND next_attempt_at <= %s
                           AND (lease_expires_at IS NULL OR lease_expires_at <= %s)
