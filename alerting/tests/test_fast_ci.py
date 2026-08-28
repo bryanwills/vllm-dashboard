@@ -134,8 +134,8 @@ def test_more_than_eight_failures_are_persisted_in_existing_slack_batches() -> N
     assert len(fast_ci.events()) == 10
     records = outbox.records()
     assert [record.status for record in records] == [OutboxStatus.PENDING] * 2
-    assert "8 jobs failed in 30s or less — batch 1/2" in records[0].payload["text"]
-    assert "2 jobs failed in 30s or less — batch 2/2" in records[1].payload["text"]
+    assert "8 jobs failed in 5 minutes or less — batch 1/2" in records[0].payload["text"]
+    assert "2 jobs failed in 5 minutes or less — batch 2/2" in records[1].payload["text"]
     assert records[0].payload["text"].count(":red_circle:") == 8
     assert records[1].payload["text"].count(":red_circle:") == 2
     assert "GPU &lt;fast&gt; 'test'" in records[0].payload["text"]
@@ -184,7 +184,7 @@ def test_stale_batches_become_one_recovery_summary_while_fresh_batch_stays_detai
     assert (
         recovery.payload["text"].splitlines()[0]
         == ":rotating_light: *Fast CI recovery summary* — "
-        "10 jobs failed in 30s or less while notifications were unavailable"
+        "10 jobs failed in 5 minutes or less while notifications were unavailable"
     )
     assert recovery.payload["text"].count(":red_circle:") == 10
     assert "Fast CI job failure alert" in fresh.payload["text"]
