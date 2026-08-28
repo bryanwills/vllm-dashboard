@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, initSchema } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { postMessage, updateMessage, addReaction } from "@/lib/slack";
 import { effectiveWaiting } from "@/lib/queue-plugins";
 
 export const maxDuration = 55;
 
 const WAIT_THRESHOLD_MINUTES = 30;
-
-let schemaInitialized = false;
 
 interface QueueAlertEntry {
   status: "active" | "resolved";
@@ -120,11 +118,6 @@ export async function GET(request: NextRequest) {
   try {
     const db = getDb();
 
-    if (!schemaInitialized) {
-      await initSchema();
-      schemaInitialized = true;
-    }
-
     // Get latest P90 wait time per queue (only queues with waiting jobs)
     const rows = await db`
       SELECT w.queue, w.p90_wait_secs, w.p50_wait_secs, w.p95_wait_secs,
@@ -163,7 +156,7 @@ export async function GET(request: NextRequest) {
 
     let messageTs: string | null =
       summaryRows.length > 0 ? (summaryRows[0].message_ts as string) : null;
-    let queueStates: Record<string, QueueAlertEntry> =
+    const queueStates: Record<string, QueueAlertEntry> =
       summaryRows.length > 0
         ? (summaryRows[0].queues as Record<string, QueueAlertEntry>)
         : {};
