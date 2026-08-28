@@ -1,0 +1,91 @@
+"""Non-interactive entry point for timer-driven alerting consumers."""
+
+from __future__ import annotations
+
+import os
+import sys
+from collections.abc import Sequence
+from datetime import datetime, timezone
+
+from alerting.commands import Command
+from alerting.ports import Clock
+from alerting.postgres import build_fast_ci_runtime, build_full_ci_runtime
+from alerting.runtime import AlertingRuntime, ProcessStatus
+from alerting.slack import SlackDeliveryPort
+
+
+class SystemClock:
+    """UTC wall clock used by production workers."""
+
+    def now(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+
+def _required_environment(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"required environment variable is missing: {name}")
+    return value
+
+
+def _slack() -> SlackDeliveryPort:
+    return SlackDeliveryPort(
+        bot_token=os.environ.get("SLACK_BOT_TOKEN"),
+        webhook_urls={},
+    )
+
+
+def _runtime(consumer: str, clock: Clock) -> AlertingRuntime:
+    database_url = _required_environment("DATABASE_URL")
+    if consumer == "fast-ci":
+        return build_fast_ci_runtime(
+            database_url=database_url,
+            databricks_host=_required_environment("DATABRICKS_HOST"),
+            databricks_token=_required_environment("DATABRICKS_TOKEN"),
+            databricks_warehouse_id=_required_environment(
+                "DATABRICKS_WAREHOUSE_ID"
+            ),
+            slack=_slack(),
+            clock=clock,
+        )
+    if consumer == "full-ci":
+        return build_full_ci_runtime(
+            database_url=database_url,
+            buildkite_token=_required_environment("BUILDKITE_TOKEN"),
+            slack=_slack(),
+            clock=clock,
+        )
+    raise ValueError(f"unknown consumer: {consumer}")
+
+
+def scheduled_command(consumer: str, target_time: datetime) -> Command:
+    """Create one minute-stable reconciliation command for a timer wake-up."""
+    if target_time.tzinfo is None:
+        raise ValueError("target_time must be timezone-aware")
+    command_types = {
+        "fast-ci": "fast_ci_scan",
+        "full-ci": "full_ci_reconcile",
+    }
+    try:
+        command_type = command_types[consumer]
+    except KeyError as exc:
+        raise ValueError(f"unknown consumer: {consumer}") from exc
+    target = target_time.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    return Command(command_type=command_type, target_time=target)
+
+
+def main(arguments: Sequence[str] | None = None) -> int:
+    args = list(arguments if arguments is not None else sys.argv[1:])
+    if len(args) != 1 or args[0] not in {"fast-ci", "full-ci"}:
+        return 2
+
+    consumer = args[0]
+    clock = SystemClock()
+    result = _runtime(consumer, clock).process_command(
+        scheduled_command(consumer, clock.now())
+    )
+    return 1 if result.status is ProcessStatus.FAILED else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

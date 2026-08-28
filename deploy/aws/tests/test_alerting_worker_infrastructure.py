@@ -1,0 +1,129 @@
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from alerting.worker import scheduled_command
+
+
+AWS_DIR = Path(__file__).parents[1]
+
+
+def read(relative_path: str) -> str:
+    return (AWS_DIR / relative_path).read_text()
+
+
+def test_stack_provisions_one_disposable_worker_without_deferred_services() -> None:
+    template = read("alerting-worker.yaml")
+
+    assert template.count("Type: AWS::EC2::Instance") == 1
+    assert "AWS::AutoScaling" not in template
+    assert "AWS::SQS" not in template
+    assert "AWS::Events" not in template
+    assert "AWS::Scheduler" not in template
+    assert "Encrypted: true" in template
+    assert "DeleteOnTermination: true" in template
+    assert "HttpTokens: required" in template
+    assert "SecurityGroupIngress" not in template
+
+
+def test_instance_role_is_scoped_to_checkpoint_bucket_and_named_secrets() -> None:
+    template = read("alerting-worker.yaml")
+
+    assert "- s3:ListBucket" in template
+    assert "- s3:GetObject" in template
+    assert "- s3:PutObject" in template
+    assert "- secretsmanager:GetSecretValue" in template
+    assert "Ref: WorkerSecretArn" in template
+    assert "Ref: GitHubReadOnlySecretArn" in template
+    assert "Resource: '*'" not in template
+
+
+def test_full_ci_timer_uses_pacific_wall_clock_and_recovers_after_downtime() -> None:
+    timer = read("systemd/alerting-full-ci.timer")
+
+    assert "OnCalendar=*-*-* 05:00:00 America/Los_Angeles" in timer
+    assert "OnCalendar=*-*-* 19:00:00 America/Los_Angeles" in timer
+    assert "OnBootSec=" in timer
+    assert "Persistent=true" in timer
+
+
+def test_fast_ci_timer_uses_pacific_wall_clock_every_fifteen_minutes() -> None:
+    timer = read("systemd/alerting-fast-ci.timer")
+
+    assert "OnCalendar=*-*-* *:00/15:00 America/Los_Angeles" in timer
+    assert "OnBootSec=" in timer
+    assert "Persistent=true" in timer
+
+
+def test_consumers_are_independent_and_units_never_contain_sensitive_data() -> None:
+    full_service = read("systemd/alerting-full-ci.service")
+    fast_service = read("systemd/alerting-fast-ci.service")
+    unit_text = "\n".join(
+        [
+            full_service,
+            fast_service,
+            read("systemd/alerting-full-ci.timer"),
+            read("systemd/alerting-fast-ci.timer"),
+        ]
+    )
+
+    assert "run-worker full-ci" in full_service
+    assert "run-worker fast-ci" in fast_service
+    assert "StandardOutput=null" in full_service
+    assert "StandardError=null" in full_service
+    assert "StandardOutput=null" in fast_service
+    assert "StandardError=null" in fast_service
+    for sensitive_name in (
+        "DATABASE_URL",
+        "TOKEN",
+        "PASSWORD",
+        "CI_LOG",
+        "SLACK_PAYLOAD",
+        "MODEL_OUTPUT",
+    ):
+        assert sensitive_name not in unit_text
+
+
+def test_runtime_loads_secrets_non_interactively_into_ephemeral_storage() -> None:
+    loader = read("bin/load-secrets")
+    runner = read("bin/run-worker")
+
+    assert "aws secretsmanager get-secret-value" in loader
+    assert "AWS_ACCESS_KEY_ID" not in loader
+    assert "/run/alerting" in runner
+    assert "load-secrets" in runner
+    assert "rm -f" in runner
+
+
+def test_installation_creates_a_non_login_user_and_separate_timers() -> None:
+    installer = read("install.sh")
+
+    assert "useradd --system" in installer
+    assert "--shell /sbin/nologin" in installer
+    assert "systemctl enable --now alerting-full-ci.timer" in installer
+    assert "systemctl enable --now alerting-fast-ci.timer" in installer
+
+
+def test_deployment_contract_requires_a_read_only_github_credential() -> None:
+    documentation = read("README.md")
+
+    assert "read-only" in documentation
+    assert "GitHubReadOnlySecretArn" in documentation
+    assert "no repository write" in documentation
+
+
+@pytest.mark.parametrize(
+    ("consumer", "command_type"),
+    [("full-ci", "full_ci_reconcile"), ("fast-ci", "fast_ci_scan")],
+)
+def test_timer_wake_up_creates_a_minute_stable_reconciliation_command(
+    consumer: str, command_type: str
+) -> None:
+    command = scheduled_command(
+        consumer,
+        datetime(2026, 8, 27, 19, 0, 42, 123456, tzinfo=timezone.utc),
+    )
+
+    assert command.command_type == command_type
+    assert command.target_time == datetime(2026, 8, 27, 19, 0, tzinfo=timezone.utc)

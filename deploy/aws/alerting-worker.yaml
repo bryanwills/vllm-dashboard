@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Disposable single-instance runtime for vLLM CI alerting
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  InstanceType:
+    Type: String
+    Default: t3.small
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/vllm-project/vllm-dashboard.git
+  RepositoryRef:
+    Type: String
+    Default: main
+  WorkerSecretArn:
+    Type: String
+    Description: ARN of a JSON secret containing runtime environment variables
+  GitHubReadOnlySecretArn:
+    Type: String
+    Description: ARN of a JSON secret containing a read-only GITHUB_TOKEN
+
+Resources:
+  CheckpointBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AlertingWorkerCheckpointAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  Fn::GetAtt: [CheckpointBucket, Arn]
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  Fn::Sub:
+                    - ${BucketArn}/*
+                    - BucketArn:
+                        Fn::GetAtt: [CheckpointBucket, Arn]
+        - PolicyName: AlertingWorkerSecretAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - Ref: WorkerSecretArn
+                  - Ref: GitHubReadOnlySecretArn
+
+  WorkerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: WorkerRole
+
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Egress-only access for the vLLM alerting worker
+      VpcId:
+        Ref: VpcId
+      SecurityGroupEgress:
+        - Description: HTTPS APIs and package installation
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: Direct Postgres
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+        - Description: Supavisor transaction pooler
+          IpProtocol: tcp
+          FromPort: 6543
+          ToPort: 6543
+          CidrIp: 0.0.0.0/0
+
+  WorkerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Ref: AmiId
+      InstanceType:
+        Ref: InstanceType
+      IamInstanceProfile:
+        Ref: WorkerInstanceProfile
+      SecurityGroupIds:
+        - Ref: WorkerSecurityGroup
+      SubnetId:
+        Ref: SubnetId
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeType: gp3
+            VolumeSize: 16
+      Tags:
+        - Key: Name
+          Value: vllm-alerting-worker
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              dnf install -y git python3.12 python3.12-pip
+              install -d -m 0755 /opt/alerting
+              git clone --depth 1 --branch '${RepositoryRef}' '${RepositoryUrl}' /opt/alerting/source
+              /opt/alerting/source/deploy/aws/install.sh '${BucketName}' '${WorkerSecret}' '${GitHubSecret}'
+            - BucketName:
+                Ref: CheckpointBucket
+              WorkerSecret:
+                Ref: WorkerSecretArn
+              GitHubSecret:
+                Ref: GitHubReadOnlySecretArn
+
+Outputs:
+  CheckpointBucketName:
+    Value:
+      Ref: CheckpointBucket
+  WorkerInstanceId:
+    Value:
+      Ref: WorkerInstance
