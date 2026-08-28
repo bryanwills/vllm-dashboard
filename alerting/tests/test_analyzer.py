@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from alerting.analyzer import (
     CauseCategory,
     CheckpointRef,
     CompletedAnalysis,
+    ClaudeCodeRunner,
     FailureCache,
     FailureCondition,
     FailureLifecycle,
@@ -26,12 +28,12 @@ from alerting.analyzer import (
     pack_checkpoint,
     unpack_checkpoint,
 )
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.full_ci import FullCIReconciliationHandler, FullCIRun
 from alerting.memory import (
     FixedClock,
     InMemoryAnalyzerStore,
-    InMemoryExecutionStore,
+    InMemoryAutomationExecutionStore,
     InMemoryFullCIStore,
     InMemoryOutboxStore,
     RecordingSlackPort,
@@ -40,8 +42,8 @@ from alerting.ports import (
     AlertPath,
     DeliveryMode,
     DestinationMode,
-    OutboxMessage,
-    OutboxRecord,
+    NotificationIntent,
+    NotificationIntentRecord,
 )
 from alerting.runtime import AlertingRuntime, ProcessResult, ProcessStatus
 
@@ -122,20 +124,21 @@ def well_behaved(
     """A faithful analyzer: classifies from the summary and writes all outputs."""
     logs = working_dir / ".logs"
     summary = json.loads((logs / "nightly_summary.json").read_text())
-    hard = sorted(
-        {
-            job["name"]
-            for job in summary["jobs"]
-            if job["state"] == "failed" and not job["soft_failed"]
-        }
-    )
+    hard = {
+        job["name"]
+        for job in summary["jobs"]
+        if job["state"] == "failed" and not job["soft_failed"]
+    }
+    previous = set(summary["previous_failures"]["failed_tests"])
+    passed = {job["name"] for job in summary["jobs"] if job["state"] == "passed"}
+    durable_failures = sorted(hard | (previous - passed))
     (logs / "ci_report.txt").write_text(report)
     (logs / "failed_tests_cache.json").write_text(
         json.dumps(
             {
                 "build_number": summary["number"],
                 "commit": summary["commit"],
-                "failed_tests": hard,
+                "failed_tests": durable_failures,
             }
         )
     )
@@ -228,7 +231,7 @@ class Harness:
         delivery_mode: DeliveryMode = DeliveryMode.LIVE,
     ) -> None:
         self.clock = FixedClock(START)
-        self.executions = InMemoryExecutionStore()
+        self.executions = InMemoryAutomationExecutionStore()
         self.outbox = InMemoryOutboxStore()
         self.full_ci = InMemoryFullCIStore(executions=self.executions)
         self.store = InMemoryAnalyzerStore(full_ci=self.full_ci, outbox=self.outbox)
@@ -252,7 +255,7 @@ class Harness:
             },
         )
         reconcile_runtime.process_command(
-            Command(command_type="full_ci_reconcile", target_time=RUN3_AT)
+            ScheduledCommand(command_type="full_ci_reconcile", target_time=RUN3_AT)
         )
         self.runtime = AlertingRuntime(
             executions=self.executions,
@@ -278,7 +281,7 @@ class Harness:
 
     def analyze(self, *, target: datetime = RUN3_AT) -> ProcessResult:
         return self.runtime.process_command(
-            Command(command_type="full_ci_analyze", target_time=target)
+            ScheduledCommand(command_type="full_ci_analyze", target_time=target)
         )
 
     def seed_analysis(
@@ -307,7 +310,7 @@ class Harness:
                 conditions=conditions,
                 checkpoint=checkpoint,
             ),
-            notification=OutboxMessage(
+            notification=NotificationIntent(
                 delivery_id=delivery_id,
                 alert_ref=f"full-ci-comparison:{run.build_id}",
                 alert_path=AlertPath.FULL_CI,
@@ -319,7 +322,7 @@ class Harness:
             now=self.clock.now(),
         )
 
-    def new_notifications(self) -> list[OutboxRecord]:
+    def new_notifications(self) -> list[NotificationIntentRecord]:
         """Outbox records enqueued by analysis, excluding seeded baselines."""
         return [
             record
@@ -357,7 +360,7 @@ def suspicious_pr(pr_number: int, failed_tests: list[str]) -> dict[str, object]:
     }
 
 
-def notification_for(harness: Harness, build_id: str) -> OutboxRecord:
+def notification_for(harness: Harness, build_id: str) -> NotificationIntentRecord:
     record = harness.outbox.get_outbox(f"full-ci:{build_id}")
     assert record is not None, f"no notification enqueued for {build_id}"
     return record
@@ -605,8 +608,10 @@ def test_fixed_requires_a_positively_observed_pass() -> None:
         for condition in analysis.conditions
         if condition.lifecycle is FailureLifecycle.FIXED
     }
-    assert set(fixed) == {
-        "Fixed Job",
+    assert set(fixed) == {"Fixed Job"}
+    assert fixed["Fixed Job"].summary == "passed without a verified cause"
+    assert all(condition.fixing_pr is None for condition in fixed.values())
+    assert set(analysis.failure_cache.failed_tests) == {
         "Timed Out Job",
         "Running Job",
         "Canceled Job",
@@ -614,16 +619,6 @@ def test_fixed_requires_a_positively_observed_pass() -> None:
         "Absent Job",
         "Soft Job",
     }
-    # Only the positively observed pass reads as resolved; every other state
-    # is called out as such rather than claimed as a fix.
-    assert fixed["Fixed Job"].summary == "passed without a verified cause"
-    assert "timed_out" in fixed["Timed Out Job"].summary
-    assert "running" in fixed["Running Job"].summary
-    assert "canceled" in fixed["Canceled Job"].summary
-    assert "scheduled" in fixed["Scheduled Job"].summary
-    assert "absent" in fixed["Absent Job"].summary
-    assert "failed" in fixed["Soft Job"].summary
-    assert all(condition.fixing_pr is None for condition in fixed.values())
 
 
 def test_fixed_with_verified_merged_revert_is_a_code_fix() -> None:
@@ -979,6 +974,60 @@ def test_incomplete_build_is_left_pending_not_analyzed() -> None:
     assert harness.runner.runs == 0
     pending = harness.store.pending_comparisons()
     assert [context.current.build_id for context in pending] == [run2.build_id]
+
+
+def test_incomplete_oldest_comparison_blocks_newer_analysis() -> None:
+    run1 = make_run(1, RUN1_AT)
+    run2 = make_run(2, RUN2_AT)
+    run3 = make_run(3, RUN3_AT)
+    harness = Harness(
+        runs=[run1, run2, run3],
+        builds={
+            2: build_json(
+                2,
+                [("Job A", "passed", False), ("Job B", "running", False)],
+                scheduled_at=RUN2_AT,
+                state="running",
+            ),
+            3: build_json(
+                3,
+                mostly_passing_jobs([("Job C", "failed", False)]),
+                scheduled_at=RUN3_AT,
+            ),
+        },
+    )
+
+    result = harness.analyze()
+
+    assert result.status is ProcessStatus.COMPLETED
+    assert harness.store.analyses() == []
+    assert harness.runner.runs == 0
+
+
+def test_claude_runner_grants_only_required_read_only_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    invocation: list[str] = []
+
+    def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        invocation.extend(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr("alerting.analyzer.subprocess.run", run)
+
+    ClaudeCodeRunner(binary="claude-test", prompt="analyze").run(tmp_path)
+
+    assert invocation[:4] == ["claude-test", "-p", "analyze", "--allowedTools"]
+    allowed = invocation[4].split(",")
+    assert allowed == [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Task",
+        "Bash(curl:*)",
+    ]
 
 
 def test_missed_comparisons_are_analyzed_chronologically() -> None:

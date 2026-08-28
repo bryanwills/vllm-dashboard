@@ -9,7 +9,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from alerting.ports import AlertPath, OutboxRecord
+from alerting.ports import AlertPath, NotificationIntentRecord
 from alerting.postgres import PostgresAlertStore
 
 
@@ -20,7 +20,7 @@ def _database_url() -> str:
     return value
 
 
-def _payload(record: OutboxRecord) -> dict[str, Any]:
+def _payload(record: NotificationIntentRecord) -> dict[str, Any]:
     return {
         "delivery_id": record.delivery_id,
         "alert_ref": record.alert_ref,

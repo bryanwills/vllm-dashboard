@@ -36,14 +36,14 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
-from alerting.commands import Command, SCHEMA_VERSION
+from alerting.commands import ScheduledCommand, SCHEMA_VERSION
 from alerting.full_ci import FullCIJobOutcome, FullCIRun
 from alerting.ports import (
     AlertPath,
     Clock,
     DeliveryMode,
     DestinationMode,
-    OutboxMessage,
+    NotificationIntent,
 )
 
 COMPLETENESS_THRESHOLD = 0.95
@@ -245,7 +245,7 @@ class AnalyzerStore(Protocol):
         self,
         *,
         analysis: CompletedAnalysis,
-        notification: OutboxMessage,
+        notification: NotificationIntent,
         now: datetime,
     ) -> None:
         """Atomically persist the analysis, its conditions, the checkpoint
@@ -451,7 +451,7 @@ def _read_json_file(path: Path, description: str) -> Any:
 def _read_outputs(
     workdir: Path,
     *,
-    expected_hard_failures: set[str],
+    expected_failures: set[str],
     build_number: int,
     commit_sha: str,
 ) -> _AnalyzerOutputs:
@@ -475,10 +475,10 @@ def _read_outputs(
     if not isinstance(raw_tests, list):
         raise AnalyzerError("failure cache has no failed_tests list")
     failed_tests = tuple(sorted({str(name) for name in raw_tests}))
-    if set(failed_tests) != expected_hard_failures:
+    if set(failed_tests) != expected_failures:
         raise AnalyzerError(
-            "failure cache does not match the observed hard failures: "
-            f"cache={sorted(failed_tests)} observed={sorted(expected_hard_failures)}"
+            "failure cache does not match the durable failure baseline: "
+            f"cache={sorted(failed_tests)} expected={sorted(expected_failures)}"
         )
     if raw_cache.get("build_number") != build_number:
         raise AnalyzerError("failure cache names the wrong build")
@@ -552,15 +552,16 @@ class FullCIAnalysisHandler:
         self._clock = clock
         self._delivery_mode = delivery_mode
 
-    def __call__(self, command: Command) -> None:
+    def __call__(self, command: ScheduledCommand) -> None:
         # Each comparison commits independently, so a crash or failure leaves
         # completed analyses durable and the rest pending for the next tick.
         # The runtime completes this command's execution after the handler
         # returns; a crash before that is recovered by idempotent replay.
         for context in self._store.pending_comparisons():
-            self._analyze(context)
+            if not self._analyze(context):
+                break
 
-    def _analyze(self, context: ComparisonContext) -> None:
+    def _analyze(self, context: ComparisonContext) -> bool:
         build = self._builds.get_build(context.current.build_number)
         raw_jobs = build.get("jobs")
         if not isinstance(raw_jobs, list):
@@ -576,9 +577,13 @@ class FullCIAnalysisHandler:
             and NON_NVIDIA_JOB.search(str(job["name"])) is None
         ]
         if not _complete_enough(jobs):
-            return  # not ready; stays pending for the next tick
+            return False  # newer comparisons cannot overtake this baseline
 
         cache = self._store.failure_cache_before(context.current.scheduled_at)
+        passed = {job.name for job in jobs if job.state == "passed"}
+        expected_failures = _hard_failures(jobs) | (
+            set(cache.failed_tests) - passed
+        )
         checkpoint = self._store.latest_checkpoint()
         if checkpoint is None:
             raise AnalyzerError("no analyzer checkpoint is referenced")
@@ -607,7 +612,7 @@ class FullCIAnalysisHandler:
             self._runner.run(workdir)
             outputs = _read_outputs(
                 workdir,
-                expected_hard_failures=_hard_failures(jobs),
+                expected_failures=expected_failures,
                 build_number=context.current.build_number,
                 commit_sha=commit_sha,
             )
@@ -623,7 +628,7 @@ class FullCIAnalysisHandler:
                     conditions=conditions,
                     checkpoint=checkpoint,
                 ),
-                notification=OutboxMessage(
+                notification=NotificationIntent(
                     delivery_id=f"full-ci:{context.current.build_id}",
                     alert_ref=f"full-ci-comparison:{context.current.build_id}",
                     alert_path=AlertPath.FULL_CI,
@@ -634,6 +639,7 @@ class FullCIAnalysisHandler:
                 ),
                 now=self._clock.now(),
             )
+        return True
 
     def _classify(
         self,
@@ -667,11 +673,10 @@ class FullCIAnalysisHandler:
                     culprit_pr=prior.culprit_pr if prior is not None else None,
                 )
             )
-        # Every resolved baseline name is reported, but the summary says how:
-        # only a positively observed pass reads as a fix; other states and
-        # absence are called out as such.
-        for name in sorted(previous - hard):
-            conditions.append(self._fixed_condition(name, jobs, before=before))
+        passed = {job.name for job in jobs if job.state == "passed"}
+        for name in sorted((previous - hard) & passed):
+            prior = self._store.prior_condition(name, before=before)
+            conditions.append(self._passed_condition(name, prior))
         return tuple(conditions)
 
     @staticmethod
@@ -716,29 +721,6 @@ class FullCIAnalysisHandler:
             cause=attribution.cause,
             summary=attribution.summary,
             culprit_pr=culprit,
-        )
-
-    def _fixed_condition(
-        self, name: str, jobs: list[FullCIJobOutcome], *, before: datetime
-    ) -> FailureCondition:
-        states = {job.state for job in jobs if job.name == name}
-        prior = self._store.prior_condition(name, before=before)
-        if "passed" in states:
-            return self._passed_condition(name, prior)
-        if states:
-            return FailureCondition(
-                job_name=name,
-                lifecycle=FailureLifecycle.FIXED,
-                cause=CauseCategory.UNKNOWN,
-                summary=f"no longer failing; current state {sorted(states)[0]}, not observed passing",
-                culprit_pr=prior.culprit_pr if prior is not None else None,
-            )
-        return FailureCondition(
-            job_name=name,
-            lifecycle=FailureLifecycle.FIXED,
-            cause=CauseCategory.UNKNOWN,
-            summary="absent from the current run (renamed or removed)",
-            culprit_pr=prior.culprit_pr if prior is not None else None,
         )
 
     def _passed_condition(
@@ -797,7 +779,13 @@ class ClaudeCodeRunner:
     def run(self, working_dir: Path) -> None:
         try:
             completed = subprocess.run(
-                [self._binary, "-p", self._prompt],
+                [
+                    self._binary,
+                    "-p",
+                    self._prompt,
+                    "--allowedTools",
+                    "Read,Write,Edit,Glob,Grep,Task,Bash(curl:*)",
+                ],
                 cwd=working_dir,
                 capture_output=True,
                 text=True,

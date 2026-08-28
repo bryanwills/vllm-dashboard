@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.fast_ci import (
     DatabricksFastCISource,
     FastCIScanHandler,
@@ -13,12 +13,12 @@ from alerting.fast_ci import (
 )
 from alerting.memory import (
     FixedClock,
-    InMemoryExecutionStore,
+    InMemoryAutomationExecutionStore,
     InMemoryFastCIStore,
     InMemoryOutboxStore,
     RecordingSlackPort,
 )
-from alerting.ports import DeliveryMode, ExecutionStatus, OutboxRecord, OutboxStatus
+from alerting.ports import DeliveryMode, AutomationExecutionStatus, NotificationIntentRecord, OutboxStatus
 from alerting.runtime import AlertingRuntime, ProcessStatus
 
 START = datetime(2026, 8, 27, 19, 0, tzinfo=timezone.utc)
@@ -47,7 +47,7 @@ class RecordingDatabricks:
 
 
 class UnavailableSlackPort:
-    def deliver(self, _record: OutboxRecord) -> str | None:
+    def deliver(self, _record: NotificationIntentRecord) -> str | None:
         raise RuntimeError("slack unavailable")
 
 
@@ -78,12 +78,12 @@ def make_runtime(
     delivery_mode: DeliveryMode = DeliveryMode.LIVE,
 ) -> tuple[
     AlertingRuntime,
-    InMemoryExecutionStore,
+    InMemoryAutomationExecutionStore,
     InMemoryOutboxStore,
     InMemoryFastCIStore,
 ]:
     clock = clock or FixedClock(START)
-    executions = InMemoryExecutionStore()
+    executions = InMemoryAutomationExecutionStore()
     outbox = InMemoryOutboxStore()
     fast_ci = InMemoryFastCIStore(executions=executions, outbox=outbox)
     handler = FastCIScanHandler(
@@ -106,7 +106,7 @@ def make_runtime(
 def test_empty_scan_advances_cursor_without_enqueuing_notification() -> None:
     source = FixtureFastCISource()
     runtime, _, outbox, fast_ci = make_runtime(source)
-    command = Command(command_type="fast_ci_scan", target_time=START)
+    command = ScheduledCommand(command_type="fast_ci_scan", target_time=START)
 
     result = runtime.process_command(command)
 
@@ -127,7 +127,7 @@ def test_more_than_eight_failures_are_persisted_in_existing_slack_batches() -> N
     runtime, _, outbox, fast_ci = make_runtime(source)
 
     result = runtime.process_command(
-        Command(command_type="fast_ci_scan", target_time=START + timedelta(minutes=1))
+        ScheduledCommand(command_type="fast_ci_scan", target_time=START + timedelta(minutes=1))
     )
 
     assert result.status is ProcessStatus.COMPLETED
@@ -159,7 +159,7 @@ def test_stale_batches_become_one_recovery_summary_while_fresh_batch_stays_detai
     clock = FixedClock(START)
     runtime, _, outbox, fast_ci = make_runtime(source, slack=slack, clock=clock)
 
-    runtime.process_command(Command(command_type="fast_ci_scan", target_time=START))
+    runtime.process_command(ScheduledCommand(command_type="fast_ci_scan", target_time=START))
     stale_delivery_ids = {record.delivery_id for record in outbox.records()}
     assert len(stale_delivery_ids) == 2
 
@@ -167,7 +167,7 @@ def test_stale_batches_become_one_recovery_summary_while_fresh_batch_stays_detai
     fresh_event = event("fresh-job", finished_at=clock.now())
     source.rows = [*stale_events, fresh_event]
     runtime.process_command(
-        Command(command_type="fast_ci_scan", target_time=clock.now())
+        ScheduledCommand(command_type="fast_ci_scan", target_time=clock.now())
     )
 
     result = runtime.dispatch_due_notifications()
@@ -205,7 +205,7 @@ def test_duplicate_commands_windows_and_job_ids_create_one_event_and_outbox_row(
 ):
     source = FixtureFastCISource([event("job-1"), event("job-1")])
     runtime, _, outbox, fast_ci = make_runtime(source)
-    first = Command(command_type="fast_ci_scan", target_time=START)
+    first = ScheduledCommand(command_type="fast_ci_scan", target_time=START)
 
     assert runtime.process_command(first).status is ProcessStatus.COMPLETED
     assert (
@@ -213,7 +213,7 @@ def test_duplicate_commands_windows_and_job_ids_create_one_event_and_outbox_row(
     )
 
     source.rows = [event("job-1"), event("job-2")]
-    second = Command(
+    second = ScheduledCommand(
         command_type="fast_ci_scan", target_time=START + timedelta(minutes=15)
     )
     assert runtime.process_command(second).status is ProcessStatus.COMPLETED
@@ -233,7 +233,7 @@ def test_imported_legacy_job_id_is_not_reposted() -> None:
 
     assert (
         runtime.process_command(
-            Command(command_type="fast_ci_scan", target_time=START)
+            ScheduledCommand(command_type="fast_ci_scan", target_time=START)
         ).status
         is ProcessStatus.COMPLETED
     )
@@ -247,12 +247,12 @@ def test_imported_legacy_job_id_is_not_reposted() -> None:
 def test_safety_overlap_captures_delayed_ingestion() -> None:
     source = FixtureFastCISource()
     runtime, _, outbox, fast_ci = make_runtime(source)
-    first = Command(command_type="fast_ci_scan", target_time=START)
+    first = ScheduledCommand(command_type="fast_ci_scan", target_time=START)
     runtime.process_command(first)
 
     delayed = event("late-job", finished_at=START - timedelta(minutes=5))
     source.rows = [delayed]
-    second = Command(
+    second = ScheduledCommand(
         command_type="fast_ci_scan", target_time=START + timedelta(minutes=15)
     )
     runtime.process_command(second)
@@ -268,13 +268,13 @@ def test_safety_overlap_captures_delayed_ingestion() -> None:
 def test_scan_recovers_entire_cursor_range_after_missed_intervals() -> None:
     source = FixtureFastCISource()
     runtime, _, outbox, fast_ci = make_runtime(source)
-    runtime.process_command(Command(command_type="fast_ci_scan", target_time=START))
+    runtime.process_command(ScheduledCommand(command_type="fast_ci_scan", target_time=START))
 
     recovered = event("missed-job", finished_at=START + timedelta(minutes=40))
     source.rows = [recovered]
     catch_up_target = START + timedelta(hours=1)
     result = runtime.process_command(
-        Command(command_type="fast_ci_scan", target_time=catch_up_target)
+        ScheduledCommand(command_type="fast_ci_scan", target_time=catch_up_target)
     )
 
     assert result.status is ProcessStatus.COMPLETED
@@ -289,7 +289,7 @@ def test_scan_persists_event_and_outbox_while_slack_is_unavailable() -> None:
     runtime, _, outbox, fast_ci = make_runtime(source, slack=UnavailableSlackPort())
 
     result = runtime.process_command(
-        Command(command_type="fast_ci_scan", target_time=START)
+        ScheduledCommand(command_type="fast_ci_scan", target_time=START)
     )
 
     assert result.status is ProcessStatus.COMPLETED
@@ -306,7 +306,7 @@ def test_shadow_scan_persists_rendered_output_without_slack_delivery() -> None:
         delivery_mode=DeliveryMode.SHADOW,
     )
 
-    runtime.process_command(Command(command_type="fast_ci_scan", target_time=START))
+    runtime.process_command(ScheduledCommand(command_type="fast_ci_scan", target_time=START))
     result = runtime.dispatch_due_notifications()
 
     assert result.delivered == 0
@@ -320,7 +320,7 @@ def test_shadow_scan_persists_rendered_output_without_slack_delivery() -> None:
 def test_failed_transaction_cannot_advance_cursor_past_unrecorded_event() -> None:
     source = FixtureFastCISource([event("job-1")])
     runtime, executions, outbox, fast_ci = make_runtime(source)
-    command = Command(command_type="fast_ci_scan", target_time=START)
+    command = ScheduledCommand(command_type="fast_ci_scan", target_time=START)
     fast_ci.fail_next_commit()
 
     result = runtime.process_command(command)
@@ -331,7 +331,7 @@ def test_failed_transaction_cannot_advance_cursor_past_unrecorded_event() -> Non
     assert outbox.count() == 0
     record = executions.get(command.idempotency_key)
     assert record is not None
-    assert record.status is ExecutionStatus.FAILED
+    assert record.status is AutomationExecutionStatus.FAILED
 
     assert runtime.process_command(command).status is ProcessStatus.COMPLETED
     assert fast_ci.scan_cursor() == START

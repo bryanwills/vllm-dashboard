@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, Literal
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.fast_ci import FastCIScanHandler, FastFailureEvent, FastFailureState
 from alerting.memory import FixedClock, RecordingSlackPort
 from alerting.postgres import PostgresAlertStore
@@ -203,7 +203,7 @@ def test_postgres_failure_rolls_back_events_outbox_and_cursor_before_retry() -> 
             )
         },
     )
-    command = Command(command_type="fast_ci_scan", target_time=START)
+    command = ScheduledCommand(command_type="fast_ci_scan", target_time=START)
     connection.fail_on_cursor = True
 
     assert runtime.process_command(command).status is ProcessStatus.FAILED
@@ -240,7 +240,7 @@ def test_postgres_scan_does_not_repost_imported_legacy_job_id() -> None:
     )
 
     result = runtime.process_command(
-        Command(command_type="fast_ci_scan", target_time=START)
+        ScheduledCommand(command_type="fast_ci_scan", target_time=START)
     )
 
     assert result.status is ProcessStatus.COMPLETED

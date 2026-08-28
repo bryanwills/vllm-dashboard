@@ -19,7 +19,7 @@ from alerting.analyzer import (
     PullRequestRef,
     SuspiciousPR,
 )
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.fast_ci import (
     STALE_NOTIFICATION_AGE,
     BatchFactory,
@@ -39,10 +39,10 @@ from alerting.ports import (
     Clock,
     DeliveryMode,
     DestinationMode,
-    ExecutionRecord,
-    ExecutionStatus,
-    OutboxMessage,
-    OutboxRecord,
+    AutomationExecution,
+    AutomationExecutionStatus,
+    NotificationIntent,
+    NotificationIntentRecord,
     OutboxStatus,
     SlackPort,
 )
@@ -71,7 +71,7 @@ class PostgresAlertStore:
         )
 
     def claim(
-        self, command: Command, *, now: datetime, lease_until: datetime
+        self, command: ScheduledCommand, *, now: datetime, lease_until: datetime
     ) -> ClaimOutcome:
         with self._connection_factory() as connection:
             with connection.transaction():
@@ -104,10 +104,10 @@ class PostgresAlertStore:
                     """,
                     (command.idempotency_key,),
                 ).fetchone()
-                if row[0] == ExecutionStatus.COMPLETED.value:
+                if row[0] == AutomationExecutionStatus.COMPLETED.value:
                     return ClaimOutcome.ALREADY_COMPLETED
                 if (
-                    row[0] == ExecutionStatus.RUNNING.value
+                    row[0] == AutomationExecutionStatus.RUNNING.value
                     and row[1] is not None
                     and row[1] > now
                 ):
@@ -146,7 +146,7 @@ class PostgresAlertStore:
                 (error, idempotency_key),
             )
 
-    def get(self, idempotency_key: str) -> ExecutionRecord | None:
+    def get(self, idempotency_key: str) -> AutomationExecution | None:
         with self._connection_factory() as connection:
             row = connection.execute(
                 """
@@ -159,12 +159,12 @@ class PostgresAlertStore:
             ).fetchone()
         if row is None:
             return None
-        return ExecutionRecord(
+        return AutomationExecution(
             idempotency_key=row[0],
             command_type=row[1],
             schema_version=row[2],
             target_time=row[3],
-            status=ExecutionStatus(row[4]),
+            status=AutomationExecutionStatus(row[4]),
             attempts=row[5],
             lease_expires_at=row[6],
             last_error=row[7],
@@ -173,7 +173,7 @@ class PostgresAlertStore:
 
     def enqueue(
         self,
-        message: OutboxMessage,
+        message: NotificationIntent,
         *,
         now: datetime,
         next_attempt_at: datetime | None = None,
@@ -188,7 +188,7 @@ class PostgresAlertStore:
     @staticmethod
     def _enqueue(
         connection: Any,
-        message: OutboxMessage,
+        message: NotificationIntent,
         *,
         next_attempt_at: datetime,
     ) -> None:
@@ -219,7 +219,7 @@ class PostgresAlertStore:
         lease_until: datetime,
         limit: int,
         alert_path: AlertPath | None = None,
-    ) -> list[OutboxRecord]:
+    ) -> list[NotificationIntentRecord]:
         with self._connection_factory() as connection:
             with connection.transaction():
                 rows = connection.execute(
@@ -261,8 +261,8 @@ class PostgresAlertStore:
         return [self._outbox_record(row) for row in rows]
 
     @staticmethod
-    def _outbox_record(row: Any) -> OutboxRecord:
-        return OutboxRecord(
+    def _outbox_record(row: Any) -> NotificationIntentRecord:
+        return NotificationIntentRecord(
             delivery_id=row[0],
             alert_ref=row[1],
             alert_path=AlertPath(row[2]),
@@ -337,7 +337,7 @@ class PostgresAlertStore:
                 (*values, delivery_id),
             )
 
-    def get_outbox(self, delivery_id: str) -> OutboxRecord | None:
+    def get_outbox(self, delivery_id: str) -> NotificationIntentRecord | None:
         with self._connection_factory() as connection:
             row = connection.execute(
                 """
@@ -355,7 +355,7 @@ class PostgresAlertStore:
 
     def shadow_outputs(
         self, *, alert_path: AlertPath, limit: int
-    ) -> list[OutboxRecord]:
+    ) -> list[NotificationIntentRecord]:
         with self._connection_factory() as connection:
             rows = connection.execute(
                 """
@@ -660,7 +660,7 @@ class PostgresAlertStore:
     def commit_scan(
         self,
         *,
-        command: Command,
+        command: ScheduledCommand,
         observations: list[FastFailureEvent],
         scanned_through: datetime,
         now: datetime,
@@ -775,7 +775,7 @@ class PostgresAlertStore:
     def commit_reconciliation(
         self,
         *,
-        command: Command,
+        command: ScheduledCommand,
         observations: list[FullCIRun],
         now: datetime,
     ) -> None:
@@ -989,7 +989,7 @@ class PostgresAlertStore:
         self,
         *,
         analysis: CompletedAnalysis,
-        notification: OutboxMessage,
+        notification: NotificationIntent,
         now: datetime,
     ) -> None:
         with self._connection_factory() as connection:

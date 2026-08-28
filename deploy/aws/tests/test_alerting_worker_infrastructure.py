@@ -99,6 +99,9 @@ def test_runtime_loads_secrets_non_interactively_into_ephemeral_storage() -> Non
     assert "rm -f" in runner
     assert 'mode_path="/run/alerting/${alert_path}.mode"' in runner
     assert 'source "$mode_path"' in runner
+    assert runner.index('source "$credentials_path"') < runner.index(
+        'source "$mode_path"'
+    )
 
 
 def test_installation_creates_a_non_login_user_and_s3_controlled_timers() -> None:
@@ -109,6 +112,8 @@ def test_installation_creates_a_non_login_user_and_s3_controlled_timers() -> Non
     assert 'alerting[aws,postgres]' in installer
     assert "@anthropic-ai/claude-code" in installer
     assert "runuser -u alerting" in installer
+    assert "npm_config_cache=/opt/alerting/npm-cache" in installer
+    assert "HOME=/opt/alerting/home" in installer
     assert "systemctl start alerting-control.service" in installer
     assert "systemctl enable --now alerting-control.timer" in installer
     assert "systemctl enable --now alerting-full-ci.timer" not in installer
@@ -131,12 +136,14 @@ def test_cutover_wizard_fences_only_selected_old_path_and_supports_rollback() ->
     wizard = read("cutover-wizard.sh")
 
     assert "vllm-fast-ci-failure-alert.timer" in wizard
+    assert "vllm-fast-ci-failure-alert.service" in wizard
     assert "/home/ubuntu/vllm-ci-report/tasks/vllm-ci-report.yaml" in wizard
     assert "vllm-nightly-perf-trigger.timer" not in wizard
     assert "archive-pending" in wizard
     assert "export-shadow" in wizard
     assert "control/${ALERT_PATH}.mode" in wizard
     assert "confirm" in wizard
+    assert "no active Full CI results-report invocation" in wizard
 
 
 def test_deployment_contract_requires_a_read_only_github_credential() -> None:

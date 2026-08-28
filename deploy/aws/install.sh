@@ -17,8 +17,11 @@ fi
 
 python3.12 -m venv /opt/alerting/venv
 /opt/alerting/venv/bin/pip install --no-cache-dir "${source_root}/alerting[aws,postgres]"
-install -d -m 0755 -o alerting -g alerting /opt/alerting/npm
-runuser -u alerting -- env npm_config_prefix=/opt/alerting/npm \
+install -d -m 0755 -o alerting -g alerting \
+  /opt/alerting/npm /opt/alerting/npm-cache /opt/alerting/home
+runuser -u alerting -- env HOME=/opt/alerting/home \
+  npm_config_prefix=/opt/alerting/npm \
+  npm_config_cache=/opt/alerting/npm-cache \
   npm install --global @anthropic-ai/claude-code
 
 install -d -m 0755 /opt/alerting/bin /etc/alerting

@@ -10,7 +10,7 @@ import pytest
 
 from alerting.memory import (
     FixedClock,
-    InMemoryExecutionStore,
+    InMemoryAutomationExecutionStore,
     InMemoryOutboxStore,
     RecordingSlackPort,
 )
@@ -18,8 +18,8 @@ from alerting.ports import (
     AlertPath,
     DeliveryMode,
     DestinationMode,
-    OutboxMessage,
-    OutboxRecord,
+    NotificationIntent,
+    NotificationIntentRecord,
     OutboxStatus,
     SlackPermanentError,
     SlackPort,
@@ -38,7 +38,7 @@ class AcceptThenCrashSlackPort:
     def __init__(self) -> None:
         self.accepted_delivery_ids: list[str] = []
 
-    def deliver(self, record: OutboxRecord) -> str | None:
+    def deliver(self, record: NotificationIntentRecord) -> str | None:
         self.accepted_delivery_ids.append(record.delivery_id)
         raise SimulatedWorkerCrash
 
@@ -48,8 +48,8 @@ def make_message(
     *,
     alert_path: AlertPath = AlertPath.FAST_CI,
     delivery_mode: DeliveryMode = DeliveryMode.LIVE,
-) -> OutboxMessage:
-    return OutboxMessage(
+) -> NotificationIntent:
+    return NotificationIntent(
         delivery_id=delivery_id,
         alert_ref="fast_failure_event:12345",
         alert_path=alert_path,
@@ -68,7 +68,7 @@ def make_runtime(
     alert_path: AlertPath | None = None,
 ) -> AlertingRuntime:
     return AlertingRuntime(
-        executions=InMemoryExecutionStore(),
+        executions=InMemoryAutomationExecutionStore(),
         outbox=outbox,
         slack=slack,
         clock=clock,
@@ -269,7 +269,7 @@ def test_duplicate_enqueue_is_a_noop() -> None:
 
     # A retried handler re-enqueuing its deterministic delivery ID must not
     # fail or overwrite the original record.
-    duplicate = OutboxMessage(
+    duplicate = NotificationIntent(
         delivery_id="fast-ci:batch-1",
         alert_ref="fast_failure_event:12345",
         alert_path=AlertPath.FAST_CI,

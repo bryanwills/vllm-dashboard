@@ -16,7 +16,8 @@ commits, open pull requests, post messages, or mutate Buildkite or GitHub.
 
 1. Split failed jobs into soft failures (`state == "failed"` and
    `soft_failed == true`) and hard failures (`state == "failed"` and not soft).
-2. Only hard failures affect the durable baseline.
+2. Current hard failures enter the durable baseline. A prior failure leaves it
+   only after a positively observed pass; missing and unfinished jobs remain.
 3. New failures are hard-failure names absent from
    `previous_failures.failed_tests`.
 4. Recurring failures are hard-failure names present in that baseline.
@@ -65,8 +66,9 @@ links or formatting.
 ## Phase D — Update outputs
 
 Write `.logs/failed_tests_cache.json` with current `build_number`, current
-`commit`, and a sorted unique `failed_tests` list containing exactly current
-hard failures. Verify all three output files exist and contain valid data:
+`commit`, and a sorted unique `failed_tests` list containing current hard
+failures plus prior failures not positively observed passing. Verify all three
+output files exist and contain valid data:
 
 - `.logs/ci_report.txt`
 - `.logs/failed_tests_cache.json`

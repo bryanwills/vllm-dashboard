@@ -8,7 +8,7 @@ from alerting.ports import (
     AlertPath,
     DeliveryMode,
     DestinationMode,
-    OutboxRecord,
+    NotificationIntentRecord,
     OutboxStatus,
 )
 from alerting.postgres import PostgresAlertStore
@@ -22,11 +22,11 @@ class FakeCutoverStore:
 
     def shadow_outputs(
         self, *, alert_path: AlertPath, limit: int
-    ) -> list[OutboxRecord]:
+    ) -> list[NotificationIntentRecord]:
         assert alert_path is AlertPath.FAST_CI
         assert limit == 5
         return [
-            OutboxRecord(
+            NotificationIntentRecord(
                 delivery_id="fast-ci:1",
                 alert_ref="fast-ci:1",
                 alert_path=AlertPath.FAST_CI,

@@ -9,7 +9,7 @@ from alerting.ports import (
     AlertPath,
     DeliveryMode,
     DestinationMode,
-    OutboxRecord,
+    NotificationIntentRecord,
     OutboxStatus,
     SlackPermanentError,
     SlackTransientError,
@@ -37,8 +37,8 @@ class StubHttpTransport:
 
 def make_record(
     *, mode: DestinationMode, destination: str = "C0ANHBE642Y"
-) -> OutboxRecord:
-    return OutboxRecord(
+) -> NotificationIntentRecord:
+    return NotificationIntentRecord(
         delivery_id="fast-ci:batch-1",
         alert_ref="fast_failure_event:12345",
         alert_path=AlertPath.FAST_CI,

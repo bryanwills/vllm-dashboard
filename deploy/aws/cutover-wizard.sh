@@ -246,18 +246,19 @@ fi
 stage "Fence or restore old producer"
 if [[ "$ALERT_PATH" == "fast_ci" ]]; then
   if [[ "$ACTION" == "cutover" ]]; then
-    warn "Only vllm-fast-ci-failure-alert.timer will stop."
-    confirm "Disable and mask old Fast CI timer on $OLD_HOST?" || exit 1
-    ssh "$OLD_HOST" "sudo systemctl disable --now vllm-fast-ci-failure-alert.timer && sudo systemctl mask vllm-fast-ci-failure-alert.timer"
+    warn "Only the old Fast CI alert timer and its active service will stop."
+    confirm "Disable and mask old Fast CI timer and service on $OLD_HOST?" || exit 1
+    ssh "$OLD_HOST" "sudo systemctl disable --now vllm-fast-ci-failure-alert.timer && sudo systemctl stop vllm-fast-ci-failure-alert.service && sudo systemctl mask vllm-fast-ci-failure-alert.timer vllm-fast-ci-failure-alert.service"
   else
-    confirm "Unmask and restore old Fast CI timer on $OLD_HOST?" || exit 1
-    ssh "$OLD_HOST" "sudo systemctl unmask vllm-fast-ci-failure-alert.timer && sudo systemctl enable --now vllm-fast-ci-failure-alert.timer"
+    confirm "Unmask old Fast CI service and restore its timer on $OLD_HOST?" || exit 1
+    ssh "$OLD_HOST" "sudo systemctl unmask vllm-fast-ci-failure-alert.service vllm-fast-ci-failure-alert.timer && sudo systemctl enable --now vllm-fast-ci-failure-alert.timer"
   fi
 else
   warn "Full CI shares claude-cron with unrelated automations. Never stop shared service."
   step "SSH to $OLD_HOST and edit only /home/ubuntu/vllm-ci-report/tasks/vllm-ci-report.yaml."
   if [[ "$ACTION" == "cutover" ]]; then
     step "Disable and fence only Full CI results-report task; preserve every unrelated task."
+    step "Confirm no active Full CI results-report invocation remains before continuing."
   else
     step "Restore only Full CI results-report task; preserve every unrelated task."
   fi

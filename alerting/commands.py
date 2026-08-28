@@ -1,4 +1,4 @@
-"""Command model for the alerting runtime.
+"""ScheduledCommand model for the alerting runtime.
 
 A command is a reconciliation wake-up produced by a scheduler tick. It carries
 no credentials, CI logs, model output, or Slack payload; Postgres, not the
@@ -14,7 +14,7 @@ SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
-class Command:
+class ScheduledCommand:
     """A scheduled unit of work identified by its type and target time."""
 
     command_type: str

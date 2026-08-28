@@ -20,7 +20,7 @@ from alerting.analyzer import (
     pack_checkpoint,
     unpack_checkpoint,
 )
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.memory import FixedClock, RecordingSlackPort
 from alerting.postgres import PostgresAlertStore
 from alerting.runtime import AlertingRuntime, ProcessStatus
@@ -363,8 +363,8 @@ def make_harness(
     return runtime, checkpoints
 
 
-def analyze_command() -> Command:
-    return Command(command_type="full_ci_analyze", target_time=RUN2_AT)
+def analyze_command() -> ScheduledCommand:
+    return ScheduledCommand(command_type="full_ci_analyze", target_time=RUN2_AT)
 
 
 def test_commit_analysis_persists_everything_in_one_transaction() -> None:

@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.full_ci import (
     BuildkiteFullCISource,
     FullCIJobOutcome,
@@ -12,7 +12,7 @@ from alerting.full_ci import (
 )
 from alerting.memory import (
     FixedClock,
-    InMemoryExecutionStore,
+    InMemoryAutomationExecutionStore,
     InMemoryFullCIStore,
     InMemoryOutboxStore,
     RecordingSlackPort,
@@ -85,11 +85,11 @@ def make_runtime(
     source: FixtureFullCISource,
 ) -> tuple[
     AlertingRuntime,
-    InMemoryExecutionStore,
+    InMemoryAutomationExecutionStore,
     InMemoryFullCIStore,
 ]:
     clock = FixedClock(START)
-    executions = InMemoryExecutionStore()
+    executions = InMemoryAutomationExecutionStore()
     outbox = InMemoryOutboxStore()
     full_ci = InMemoryFullCIStore(executions=executions)
     runtime = AlertingRuntime(
@@ -113,12 +113,12 @@ def test_missed_runs_are_ingested_in_order_with_one_comparison_each() -> None:
     source = FixtureFullCISource([second_missed, baseline, first_missed])
     runtime, _, full_ci = make_runtime(source)
 
-    baseline_tick = Command(
+    baseline_tick = ScheduledCommand(
         command_type="full_ci_reconcile", target_time=baseline.scheduled_at
     )
     assert runtime.process_command(baseline_tick).status is ProcessStatus.COMPLETED
 
-    catch_up = Command(command_type="full_ci_reconcile", target_time=START)
+    catch_up = ScheduledCommand(command_type="full_ci_reconcile", target_time=START)
     assert runtime.process_command(catch_up).status is ProcessStatus.COMPLETED
 
     assert [stored.build_number for stored in full_ci.runs()] == [100, 101, 102]
@@ -140,8 +140,8 @@ def test_duplicate_and_overlapping_ticks_create_no_duplicate_comparisons() -> No
     source = FixtureFullCISource([current, baseline, current])
     runtime, executions, full_ci = make_runtime(source)
 
-    first = Command(command_type="full_ci_reconcile", target_time=START)
-    overlap = Command(
+    first = ScheduledCommand(command_type="full_ci_reconcile", target_time=START)
+    overlap = ScheduledCommand(
         command_type="full_ci_reconcile", target_time=START + timedelta(minutes=1)
     )
 
@@ -173,7 +173,7 @@ def test_late_visible_run_repairs_chronological_comparison_chain() -> None:
 
     assert (
         runtime.process_command(
-            Command(command_type="full_ci_reconcile", target_time=START)
+            ScheduledCommand(command_type="full_ci_reconcile", target_time=START)
         ).status
         is ProcessStatus.COMPLETED
     )
@@ -181,7 +181,7 @@ def test_late_visible_run_repairs_chronological_comparison_chain() -> None:
     source.runs.append(late)
     assert (
         runtime.process_command(
-            Command(
+            ScheduledCommand(
                 command_type="full_ci_reconcile",
                 target_time=START + timedelta(minutes=1),
             )

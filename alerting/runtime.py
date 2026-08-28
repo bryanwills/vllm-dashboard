@@ -10,12 +10,12 @@ from math import isfinite
 from random import random
 from typing import Protocol
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.ports import (
     AlertPath,
     ClaimOutcome,
     Clock,
-    ExecutionStore,
+    AutomationExecutionStore,
     OutboxStore,
     SlackPermanentError,
     SlackPort,
@@ -29,7 +29,7 @@ class HandlerCompletion(Enum):
     TRANSACTIONAL = "transactional"
 
 
-CommandHandler = Callable[[Command], HandlerCompletion | None]
+CommandHandler = Callable[[ScheduledCommand], HandlerCompletion | None]
 
 DEFAULT_EXECUTION_LEASE = timedelta(minutes=30)
 DEFAULT_DISPATCH_LEASE = timedelta(minutes=5)
@@ -86,7 +86,7 @@ class AlertingRuntime:
     def __init__(
         self,
         *,
-        executions: ExecutionStore,
+        executions: AutomationExecutionStore,
         outbox: OutboxStore,
         slack: SlackPort,
         clock: Clock,
@@ -108,7 +108,7 @@ class AlertingRuntime:
         self._stale_notifications = stale_notifications
         self._alert_path = alert_path
 
-    def process_command(self, command: Command) -> ProcessResult:
+    def process_command(self, command: ScheduledCommand) -> ProcessResult:
         handler = self._handlers.get(command.command_type)
         if handler is None:
             raise UnknownCommandTypeError(command.command_type)

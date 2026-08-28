@@ -167,10 +167,11 @@ def load_legacy_state(
     cache_build_number = failure_cache.build_number
     if cache_build_number is None:
         raise ValueError("failure cache has no baseline build number")
-    if cache_build_number < reported_build_numbers[0]:
+    if cache_build_number != reported_build_numbers[0]:
         raise ValueError(
-            f"cache build {cache_build_number} predates latest "
-            f"reported build {reported_build_numbers[0]}"
+            f"cache build {cache_build_number} was not delivered as latest "
+            f"reported build {reported_build_numbers[0]}; finish or restore "
+            "the legacy delivery before importing"
         )
     return LegacyState(
         failure_cache=failure_cache,

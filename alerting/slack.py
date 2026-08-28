@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from alerting.ports import (
     DestinationMode,
-    OutboxRecord,
+    NotificationIntentRecord,
     SlackPermanentError,
     SlackTransientError,
 )
@@ -92,13 +92,13 @@ class SlackDeliveryPort:
         self._webhook_urls = dict(webhook_urls)
         self._http = http or UrllibHttpTransport()
 
-    def deliver(self, record: OutboxRecord) -> str | None:
+    def deliver(self, record: NotificationIntentRecord) -> str | None:
         if record.destination_mode is DestinationMode.WEBHOOK:
             self._deliver_webhook(record)
             return None
         return self._deliver_bot_message(record)
 
-    def _deliver_webhook(self, record: OutboxRecord) -> None:
+    def _deliver_webhook(self, record: NotificationIntentRecord) -> None:
         webhook_url = self._webhook_urls.get(record.destination)
         if not webhook_url:
             raise SlackPermanentError(
@@ -113,7 +113,7 @@ class SlackDeliveryPort:
         if response.body != b"ok":
             raise SlackPermanentError("Slack webhook rejected message")
 
-    def _deliver_bot_message(self, record: OutboxRecord) -> str | None:
+    def _deliver_bot_message(self, record: NotificationIntentRecord) -> str | None:
         if not self._bot_token:
             raise SlackPermanentError("Slack bot token is not configured")
 
@@ -164,7 +164,7 @@ def _raise_for_http_failure(response: HttpResponse) -> None:
     )
 
 
-def _delivery_payload(record: OutboxRecord) -> dict[str, Any]:
+def _delivery_payload(record: NotificationIntentRecord) -> dict[str, Any]:
     payload = dict(record.payload)
     payload["metadata"] = {
         "event_type": "vllm_alert_delivery",

@@ -5,17 +5,17 @@ from datetime import datetime, timezone
 import pytest
 
 from alerting import worker
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.ports import Clock, DeliveryMode
 from alerting.runtime import DispatchResult, ProcessResult, ProcessStatus
 
 
 class RecordingRuntime:
     def __init__(self) -> None:
-        self.commands: list[Command] = []
+        self.commands: list[ScheduledCommand] = []
         self.dispatches = 0
 
-    def process_command(self, command: Command) -> ProcessResult:
+    def process_command(self, command: ScheduledCommand) -> ProcessResult:
         self.commands.append(command)
         return ProcessResult(command.idempotency_key, ProcessStatus.COMPLETED)
 

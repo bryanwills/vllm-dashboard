@@ -17,16 +17,19 @@ trap cleanup EXIT HUP INT TERM
 
 /opt/alerting/bin/load-secrets "$credentials_path"
 set -a
-# shellcheck disable=SC1091 -- generated from validated Secrets Manager JSON
+# Generated from validated Secrets Manager JSON.
+# shellcheck disable=SC1091
 source /etc/alerting/worker.env
+# Generated from validated Secrets Manager JSON.
+# shellcheck disable=SC1090
+source "$credentials_path"
 if [ -r "$mode_path" ]; then
-  # shellcheck disable=SC1090 -- generated from validated S3 control state
+  # Generated from validated S3 control state.
+  # shellcheck disable=SC1090
   source "$mode_path"
 else
-  ALERTING_DELIVERY_MODE=shadow
+  export ALERTING_DELIVERY_MODE=shadow
 fi
-# shellcheck disable=SC1090 -- generated from validated Secrets Manager JSON
-source "$credentials_path"
 set +a
 export BUILDKITE_API_TOKEN="${BUILDKITE_TOKEN:-}"
 export HOME=/run/alerting/home

@@ -16,7 +16,6 @@ from alerting.analyzer import CheckpointRef, FailureCache
 from alerting.memory import FixedClock
 from alerting.migration import (
     ImportedFastCIJob,
-    LegacyState,
     LegacyStateImporter,
     load_legacy_state,
     main,
@@ -195,7 +194,7 @@ def test_import_uploads_memory_before_committing_migrated_baselines(
     assert store.arguments["now"] == NOW
 
 
-def test_cache_can_be_newer_than_last_reported_build_after_delivery_failure(
+def test_cache_newer_than_last_reported_build_blocks_unsafe_import(
     tmp_path: Path,
 ) -> None:
     cache_path = tmp_path / "cache.json"
@@ -210,49 +209,13 @@ def test_cache_can_be_newer_than_last_reported_build_after_delivery_failure(
     sqlite_path = tmp_path / "state.sqlite3"
     _write_sqlite(sqlite_path)
 
-    state = load_legacy_state(
-        failure_cache_path=cache_path,
-        reported_builds_path=reported_path,
-        analyzer_memory_path=memory_path,
-        fast_ci_state_path=sqlite_path,
-    )
-
-    assert state.failure_cache.build_number == 124
-    assert state.reported_build_numbers == (123, 122)
-
-
-def test_import_uses_cache_build_as_baseline_when_report_state_is_older() -> None:
-    state = LegacyState(
-        failure_cache=FailureCache(124, "commit-124", ("Job A",)),
-        reported_build_numbers=(123, 122),
-        memory_files={"MEMORY.md": b"# learned\n"},
-        fast_ci_jobs=(),
-    )
-    calls: list[str] = []
-    store = RecordingStore(calls)
-
-    class CacheBuilds:
-        def get_build(self, build_number: int) -> dict[str, Any]:
-            assert build_number == 124
-            return {
-                "id": "build-124",
-                "number": 124,
-                "scheduled_at": "2026-08-27T06:00:00Z",
-                "commit": "commit-124",
-                "message": "Full CI run - nightly",
-                "state": "failed",
-                "jobs": [],
-            }
-
-    result = LegacyStateImporter(
-        builds=CacheBuilds(),
-        checkpoints=RecordingCheckpoints(calls),
-        store=store,
-        clock=FixedClock(NOW),
-    ).import_state(state)
-
-    assert result.baseline_run.build_number == 124
-    assert store.arguments["reported_build_numbers"] == (123, 122)
+    with pytest.raises(ValueError, match="was not delivered"):
+        load_legacy_state(
+            failure_cache_path=cache_path,
+            reported_builds_path=reported_path,
+            analyzer_memory_path=memory_path,
+            fast_ci_state_path=sqlite_path,
+        )
 
 
 class Result:

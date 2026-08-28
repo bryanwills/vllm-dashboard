@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from types import TracebackType
 from typing import Any, Literal
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.full_ci import FullCIJobOutcome, FullCIReconciliationHandler, FullCIRun
 from alerting.memory import FixedClock, RecordingSlackPort
 from alerting.postgres import PostgresAlertStore
@@ -198,7 +198,7 @@ def test_postgres_failure_rolls_back_full_ci_results_before_retry() -> None:
             )
         },
     )
-    command = Command(command_type="full_ci_reconcile", target_time=START)
+    command = ScheduledCommand(command_type="full_ci_reconcile", target_time=START)
     connection.fail_on_build_id = second.build_id
 
     assert runtime.process_command(command).status is ProcessStatus.FAILED

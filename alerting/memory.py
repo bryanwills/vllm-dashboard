@@ -20,7 +20,7 @@ from alerting.analyzer import (
     FailureCondition,
     PersistedAnalysis,
 )
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.fast_ci import (
     STALE_NOTIFICATION_AGE,
     BatchFactory,
@@ -38,10 +38,10 @@ from alerting.full_ci import (
 from alerting.ports import (
     AlertPath,
     ClaimOutcome,
-    ExecutionRecord,
-    ExecutionStatus,
-    OutboxMessage,
-    OutboxRecord,
+    AutomationExecution,
+    AutomationExecutionStatus,
+    NotificationIntent,
+    NotificationIntentRecord,
     OutboxStatus,
 )
 
@@ -65,36 +65,36 @@ class FixedClock:
         return self._now + timedelta(minutes=minutes, seconds=seconds)
 
 
-class InMemoryExecutionStore:
+class InMemoryAutomationExecutionStore:
     def __init__(self) -> None:
-        self._records: dict[str, ExecutionRecord] = {}
+        self._records: dict[str, AutomationExecution] = {}
         self._fail_complete = False
 
     def claim(
-        self, command: Command, *, now: datetime, lease_until: datetime
+        self, command: ScheduledCommand, *, now: datetime, lease_until: datetime
     ) -> ClaimOutcome:
         key = command.idempotency_key
         record = self._records.get(key)
         if record is None:
-            self._records[key] = ExecutionRecord(
+            self._records[key] = AutomationExecution(
                 idempotency_key=key,
                 command_type=command.command_type,
                 schema_version=command.schema_version,
                 target_time=command.target_time,
-                status=ExecutionStatus.RUNNING,
+                status=AutomationExecutionStatus.RUNNING,
                 attempts=1,
                 lease_expires_at=lease_until,
             )
             return ClaimOutcome.CLAIMED
-        if record.status is ExecutionStatus.COMPLETED:
+        if record.status is AutomationExecutionStatus.COMPLETED:
             return ClaimOutcome.ALREADY_COMPLETED
         if (
-            record.status is ExecutionStatus.RUNNING
+            record.status is AutomationExecutionStatus.RUNNING
             and record.lease_expires_at is not None
             and record.lease_expires_at > now
         ):
             return ClaimOutcome.LEASE_HELD
-        record.status = ExecutionStatus.RUNNING
+        record.status = AutomationExecutionStatus.RUNNING
         record.attempts += 1
         record.lease_expires_at = lease_until
         return ClaimOutcome.CLAIMED
@@ -105,7 +105,7 @@ class InMemoryExecutionStore:
             self._fail_complete = False
             raise RuntimeError("completion marker lost")
         record = self._records[idempotency_key]
-        record.status = ExecutionStatus.COMPLETED
+        record.status = AutomationExecutionStatus.COMPLETED
         record.completed_at = now
         record.lease_expires_at = None
         record.last_error = None
@@ -115,40 +115,40 @@ class InMemoryExecutionStore:
 
     def fail(self, idempotency_key: str, error: str, *, now: datetime) -> None:
         record = self._records[idempotency_key]
-        if record.status is ExecutionStatus.COMPLETED:
+        if record.status is AutomationExecutionStatus.COMPLETED:
             return
-        record.status = ExecutionStatus.FAILED
+        record.status = AutomationExecutionStatus.FAILED
         record.last_error = error
         record.lease_expires_at = None
 
-    def get(self, idempotency_key: str) -> ExecutionRecord | None:
+    def get(self, idempotency_key: str) -> AutomationExecution | None:
         record = self._records.get(idempotency_key)
         return replace(record) if record is not None else None
 
     def count(self) -> int:
         return len(self._records)
 
-    def _snapshot(self) -> dict[str, ExecutionRecord]:
+    def _snapshot(self) -> dict[str, AutomationExecution]:
         return copy.deepcopy(self._records)
 
-    def _restore(self, records: dict[str, ExecutionRecord]) -> None:
+    def _restore(self, records: dict[str, AutomationExecution]) -> None:
         self._records = records
 
 
 class InMemoryOutboxStore:
     def __init__(self) -> None:
-        self._records: dict[str, OutboxRecord] = {}
+        self._records: dict[str, NotificationIntentRecord] = {}
 
     def enqueue(
         self,
-        message: OutboxMessage,
+        message: NotificationIntent,
         *,
         now: datetime,
         next_attempt_at: datetime | None = None,
     ) -> None:
         if message.delivery_id in self._records:
             return
-        self._records[message.delivery_id] = OutboxRecord(
+        self._records[message.delivery_id] = NotificationIntentRecord(
             delivery_id=message.delivery_id,
             alert_ref=message.alert_ref,
             alert_path=message.alert_path,
@@ -169,7 +169,7 @@ class InMemoryOutboxStore:
         lease_until: datetime,
         limit: int,
         alert_path: AlertPath | None = None,
-    ) -> list[OutboxRecord]:
+    ) -> list[NotificationIntentRecord]:
         due = [
             record
             for record in self._records.values()
@@ -214,20 +214,20 @@ class InMemoryOutboxStore:
         record.last_error = error
         record.lease_expires_at = None
 
-    def get_outbox(self, delivery_id: str) -> OutboxRecord | None:
+    def get_outbox(self, delivery_id: str) -> NotificationIntentRecord | None:
         record = self._records.get(delivery_id)
         return replace(record) if record is not None else None
 
     def count(self) -> int:
         return len(self._records)
 
-    def records(self) -> list[OutboxRecord]:
+    def records(self) -> list[NotificationIntentRecord]:
         return [replace(record) for record in self._records.values()]
 
-    def _snapshot(self) -> dict[str, OutboxRecord]:
+    def _snapshot(self) -> dict[str, NotificationIntentRecord]:
         return copy.deepcopy(self._records)
 
-    def _restore(self, records: dict[str, OutboxRecord]) -> None:
+    def _restore(self, records: dict[str, NotificationIntentRecord]) -> None:
         self._records = records
 
 
@@ -237,7 +237,7 @@ class InMemoryFastCIStore:
     def __init__(
         self,
         *,
-        executions: InMemoryExecutionStore,
+        executions: InMemoryAutomationExecutionStore,
         outbox: InMemoryOutboxStore,
     ) -> None:
         self._executions = executions
@@ -254,7 +254,7 @@ class InMemoryFastCIStore:
     def commit_scan(
         self,
         *,
-        command: Command,
+        command: ScheduledCommand,
         observations: list[FastFailureEvent],
         scanned_through: datetime,
         now: datetime,
@@ -352,7 +352,7 @@ class InMemoryFastCIStore:
 class InMemoryFullCIStore:
     """Atomic in-memory model of Full CI ingest and execution completion."""
 
-    def __init__(self, *, executions: InMemoryExecutionStore) -> None:
+    def __init__(self, *, executions: InMemoryAutomationExecutionStore) -> None:
         self._executions = executions
         self._runs: dict[str, FullCIRun] = {}
         self._jobs: dict[str, list[FullCIJobOutcome]] = {}
@@ -369,7 +369,7 @@ class InMemoryFullCIStore:
     def commit_reconciliation(
         self,
         *,
-        command: Command,
+        command: ScheduledCommand,
         observations: list[FullCIRun],
         now: datetime,
     ) -> None:
@@ -540,7 +540,7 @@ class InMemoryAnalyzerStore:
         self,
         *,
         analysis: CompletedAnalysis,
-        notification: OutboxMessage,
+        notification: NotificationIntent,
         now: datetime,
     ) -> None:
         analyses_snapshot = dict(self._analyses)
@@ -584,13 +584,13 @@ class RecordingSlackPort:
 
     def __init__(self, ts: str = "0.0") -> None:
         self.ts = ts
-        self.deliveries: list[OutboxRecord] = []
+        self.deliveries: list[NotificationIntentRecord] = []
         self._failures: dict[str, list[Exception]] = {}
 
     def fail_next(self, delivery_id: str, error: Exception) -> None:
         self._failures.setdefault(delivery_id, []).append(error)
 
-    def deliver(self, record: OutboxRecord) -> str | None:
+    def deliver(self, record: NotificationIntentRecord) -> str | None:
         queued = self._failures.get(record.delivery_id)
         if queued:
             raise queued.pop(0)

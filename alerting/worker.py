@@ -7,7 +7,7 @@ import sys
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.ports import Clock, DeliveryMode
 from alerting.postgres import (
     build_fast_ci_runtime,
@@ -87,7 +87,7 @@ def _runtime(
     raise ValueError(f"unknown consumer: {consumer}")
 
 
-def scheduled_command(consumer: str, target_time: datetime) -> Command:
+def scheduled_command(consumer: str, target_time: datetime) -> ScheduledCommand:
     """Create one minute-stable reconciliation command for a timer wake-up."""
     if target_time.tzinfo is None:
         raise ValueError("target_time must be timezone-aware")
@@ -101,7 +101,7 @@ def scheduled_command(consumer: str, target_time: datetime) -> Command:
     except KeyError as exc:
         raise ValueError(f"unknown consumer: {consumer}") from exc
     target = target_time.astimezone(timezone.utc).replace(second=0, microsecond=0)
-    return Command(command_type=command_type, target_time=target)
+    return ScheduledCommand(command_type=command_type, target_time=target)
 
 
 def main(arguments: Sequence[str] | None = None) -> int:

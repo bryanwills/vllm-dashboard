@@ -12,10 +12,10 @@ from datetime import datetime
 from enum import Enum, StrEnum
 from typing import Any, Protocol
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 
 
-class ExecutionStatus(Enum):
+class AutomationExecutionStatus(Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -28,14 +28,14 @@ class ClaimOutcome(Enum):
 
 
 @dataclass
-class ExecutionRecord:
+class AutomationExecution:
     """State of one command execution, keyed by its idempotency key."""
 
     idempotency_key: str
     command_type: str
     schema_version: int
     target_time: datetime
-    status: ExecutionStatus
+    status: AutomationExecutionStatus
     attempts: int
     lease_expires_at: datetime | None = None
     last_error: str | None = None
@@ -65,7 +65,7 @@ class DestinationMode(Enum):
 
 
 @dataclass(frozen=True)
-class OutboxMessage:
+class NotificationIntent:
     """A rendered notification to enqueue.
 
     `destination` never contains a secret: it is a channel ID for bot-token
@@ -83,7 +83,7 @@ class OutboxMessage:
 
 
 @dataclass
-class OutboxRecord:
+class NotificationIntentRecord:
     """Delivery state of one enqueued notification."""
 
     delivery_id: str
@@ -119,18 +119,18 @@ class Clock(Protocol):
     def now(self) -> datetime: ...
 
 
-class ExecutionStore(Protocol):
+class AutomationExecutionStore(Protocol):
     """Postgres port for the automation-executions table."""
 
     def claim(
-        self, command: Command, *, now: datetime, lease_until: datetime
+        self, command: ScheduledCommand, *, now: datetime, lease_until: datetime
     ) -> ClaimOutcome: ...
 
     def complete(self, idempotency_key: str, *, now: datetime) -> None: ...
 
     def fail(self, idempotency_key: str, error: str, *, now: datetime) -> None: ...
 
-    def get(self, idempotency_key: str) -> ExecutionRecord | None: ...
+    def get(self, idempotency_key: str) -> AutomationExecution | None: ...
 
 
 class OutboxStore(Protocol):
@@ -138,7 +138,7 @@ class OutboxStore(Protocol):
 
     def enqueue(
         self,
-        message: OutboxMessage,
+        message: NotificationIntent,
         *,
         now: datetime,
         next_attempt_at: datetime | None = None,
@@ -156,7 +156,7 @@ class OutboxStore(Protocol):
         lease_until: datetime,
         limit: int,
         alert_path: AlertPath | None = None,
-    ) -> list[OutboxRecord]:
+    ) -> list[NotificationIntentRecord]:
         """Lease up to `limit` due pending/retrying records until `lease_until`.
 
         Leasing MUST increment each record's attempts, and the returned
@@ -182,10 +182,10 @@ class OutboxStore(Protocol):
         """Same delivered-guard as mark_retrying."""
         ...
 
-    def get_outbox(self, delivery_id: str) -> OutboxRecord | None: ...
+    def get_outbox(self, delivery_id: str) -> NotificationIntentRecord | None: ...
 
 
 class SlackPort(Protocol):
     """Delivers one outbox record; returns the Slack message timestamp if any."""
 
-    def deliver(self, record: OutboxRecord) -> str | None: ...
+    def deliver(self, record: NotificationIntentRecord) -> str | None: ...

@@ -16,13 +16,13 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Protocol
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.ports import (
     AlertPath,
     Clock,
     DeliveryMode,
     DestinationMode,
-    OutboxMessage,
+    NotificationIntent,
 )
 from alerting.runtime import HandlerCompletion
 
@@ -63,7 +63,7 @@ class FastFailureEvent:
 
 @dataclass(frozen=True)
 class FastCINotificationBatch:
-    message: OutboxMessage
+    message: NotificationIntent
     job_ids: tuple[str, ...]
 
 
@@ -174,7 +174,7 @@ class FastCIStore(Protocol):
     def commit_scan(
         self,
         *,
-        command: Command,
+        command: ScheduledCommand,
         observations: list[FastFailureEvent],
         scanned_through: datetime,
         now: datetime,
@@ -374,7 +374,7 @@ def _notification_batches(
         delivery_id = f"fast-ci:{digest}"
         batches.append(
             FastCINotificationBatch(
-                message=OutboxMessage(
+                message=NotificationIntent(
                     delivery_id=delivery_id,
                     alert_ref=delivery_id,
                     alert_path=AlertPath.FAST_CI,
@@ -396,7 +396,7 @@ def recovery_notification(
     digest = hashlib.sha256("\0".join(sorted(stale_delivery_ids)).encode()).hexdigest()
     delivery_id = f"fast-ci-recovery:{digest}"
     return FastCINotificationBatch(
-        message=OutboxMessage(
+        message=NotificationIntent(
             delivery_id=delivery_id,
             alert_ref=delivery_id,
             alert_path=AlertPath.FAST_CI,
@@ -425,7 +425,7 @@ class FastCIScanHandler:
         self._clock = clock
         self._delivery_mode = delivery_mode
 
-    def __call__(self, command: Command) -> HandlerCompletion:
+    def __call__(self, command: ScheduledCommand) -> HandlerCompletion:
         cursor = self._store.scan_cursor()
         if cursor is None:
             start_time = command.target_time - INITIAL_LOOKBACK

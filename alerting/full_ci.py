@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
-from alerting.commands import Command
+from alerting.commands import ScheduledCommand
 from alerting.ports import Clock
 from alerting.runtime import HandlerCompletion
 
@@ -244,7 +244,7 @@ class FullCIStore(Protocol):
     def commit_reconciliation(
         self,
         *,
-        command: Command,
+        command: ScheduledCommand,
         observations: list[FullCIRun],
         now: datetime,
     ) -> None:
@@ -262,7 +262,7 @@ class FullCIReconciliationHandler:
         self._store = store
         self._clock = clock
 
-    def __call__(self, command: Command) -> HandlerCompletion:
+    def __call__(self, command: ScheduledCommand) -> HandlerCompletion:
         state = self._store.reconciliation_state()
         observations = self._source.fetch_runs(
             start_time=state.start_time,
