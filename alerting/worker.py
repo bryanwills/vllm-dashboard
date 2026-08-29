@@ -34,12 +34,10 @@ def _required_environment(name: str) -> str:
 
 
 def _slack() -> SlackDeliveryPort:
-    webhook_urls = {}
-    if url := os.environ.get("VLLM_CI_SLACK_URL"):
-        webhook_urls["vllm-ci"] = url
+    # Both alert paths post through the bot token; no webhook destinations.
     return SlackDeliveryPort(
         bot_token=os.environ.get("SLACK_BOT_TOKEN"),
-        webhook_urls=webhook_urls,
+        webhook_urls={},
     )
 
 
@@ -81,6 +79,13 @@ def _runtime(
             buildkite_token=_required_environment("BUILDKITE_TOKEN"),
             github_token=_required_environment("GITHUB_TOKEN"),
             checkpoint_bucket=_required_environment("ALERTING_CHECKPOINT_BUCKET"),
+            kimi_api_key=_required_environment("KIMI_API_KEY"),
+            kimi_base_url=os.environ.get(
+                "KIMI_BASE_URL", "https://api2.inferact.dev/v1"
+            ),
+            kimi_model=os.environ.get("KIMI_MODEL", "moonshotai/Kimi-K3"),
+            kimi_timeout_seconds=int(os.environ.get("KIMI_TIMEOUT_SECONDS", "3600")),
+            kimi_reasoning_effort=os.environ.get("KIMI_REASONING_EFFORT", "low"),
             slack=_slack(),
             clock=clock,
             delivery_mode=delivery_mode,

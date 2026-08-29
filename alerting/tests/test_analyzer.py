@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +18,6 @@ from alerting.analyzer import (
     CauseCategory,
     CheckpointRef,
     CompletedAnalysis,
-    ClaudeCodeRunner,
     FailureCache,
     FailureCondition,
     FailureLifecycle,
@@ -431,7 +429,8 @@ def test_analysis_persists_conditions_report_checkpoint_and_notification() -> No
     memory_files = unpack_checkpoint(harness.checkpoints.objects[checkpoint.s3_uri])
     assert memory_files["MEMORY.md"] == b"# learned"
     notification = notification_for(harness, run2.build_id)
-    assert notification.destination_mode is DestinationMode.WEBHOOK
+    assert notification.destination_mode is DestinationMode.BOT_TOKEN
+    assert notification.destination == "C0ANHBE642Y"
     assert "Job B" in notification.payload["text"]
 
 
@@ -562,6 +561,38 @@ def test_first_comparison_uses_imported_failure_cache_and_checkpoint() -> None:
     condition = harness.store.analyses()[0].conditions[0]
     assert condition.job_name == "Job A"
     assert condition.lifecycle is FailureLifecycle.RECURRING
+
+
+def test_first_ever_analysis_without_any_checkpoint_starts_with_empty_memory() -> None:
+    run1 = make_run(1, RUN1_AT)
+    run2 = make_run(2, RUN2_AT)
+    harness = Harness(
+        runs=[run1, run2],
+        builds={
+            2: build_json(
+                2,
+                mostly_passing_jobs([("Job A", "failed", False)]),
+                scheduled_at=RUN2_AT,
+            )
+        },
+        seed_checkpoint=False,
+    )
+    observed: dict[str, Any] = {}
+
+    def capture(working_dir: Path) -> None:
+        memory = working_dir / ".claude/agent-memory/vllm-ci-failure-analyzer"
+        observed["memory_files"] = (
+            list(memory.rglob("*")) if memory.is_dir() else []
+        )
+        well_behaved(working_dir)
+
+    harness.runner.on_run(capture)
+
+    assert harness.analyze().status is ProcessStatus.COMPLETED
+    assert observed["memory_files"] == []
+    checkpoint = harness.store.latest_checkpoint()
+    assert checkpoint is not None
+    assert harness.store.analyses()[0].current_build_id == run2.build_id
 
 
 def test_fixed_requires_a_positively_observed_pass() -> None:
@@ -816,29 +847,6 @@ def _write_cache_only(working_dir: Path, *, failed_tests: list[str]) -> None:
     )
 
 
-def test_missing_checkpoint_leaves_baseline_authoritative() -> None:
-    run1 = make_run(1, RUN1_AT)
-    run2 = make_run(2, RUN2_AT)
-    harness = Harness(
-        runs=[run1, run2],
-        builds={
-            2: build_json(
-                2,
-                mostly_passing_jobs([("Job A", "failed", False)]),
-                scheduled_at=RUN2_AT,
-            )
-        },
-        seed_checkpoint=False,
-    )
-
-    result = harness.analyze()
-
-    assert result.status is ProcessStatus.FAILED
-    assert harness.store.analyses() == []
-    assert harness.outbox.records() == []
-    assert harness.runner.runs == 0
-
-
 def test_corrupted_checkpoint_leaves_baseline_authoritative() -> None:
     run1 = make_run(1, RUN1_AT)
     run2 = make_run(2, RUN2_AT)
@@ -1002,32 +1010,6 @@ def test_incomplete_oldest_comparison_blocks_newer_analysis() -> None:
     assert result.status is ProcessStatus.COMPLETED
     assert harness.store.analyses() == []
     assert harness.runner.runs == 0
-
-
-def test_claude_runner_grants_only_required_read_only_tools(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    invocation: list[str] = []
-
-    def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        invocation.extend(args)
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr("alerting.analyzer.subprocess.run", run)
-
-    ClaudeCodeRunner(binary="claude-test", prompt="analyze").run(tmp_path)
-
-    assert invocation[:4] == ["claude-test", "-p", "analyze", "--allowedTools"]
-    allowed = invocation[4].split(",")
-    assert allowed == [
-        "Read",
-        "Write",
-        "Edit",
-        "Glob",
-        "Grep",
-        "Task",
-        "Bash(curl:*)",
-    ]
 
 
 def test_missed_comparisons_are_analyzed_chronologically() -> None:

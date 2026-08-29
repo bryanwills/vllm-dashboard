@@ -1,8 +1,9 @@
 """Full CI analyzer compatibility adapter.
 
-The existing Claude-based analyzer skill is invoked unchanged behind this
-adapter. Before analysis the adapter materializes the working files the skill
-expects (`.logs/nightly_summary.json`, `.logs/nightly_full.json`,
+The bundled analyzer instructions run behind this adapter through an
+`AnalyzerRunner` (see `alerting.kimi`). Before analysis the adapter
+materializes the working files the instructions
+expect (`.logs/nightly_summary.json`, `.logs/nightly_full.json`,
 `.logs/failed_tests_cache.json`, and the agent-memory directory) from Postgres,
 Buildkite, and the latest referenced S3 checkpoint. After analysis it validates
 the skill's outputs, uploads a new immutable checkpoint, and transactionally
@@ -22,7 +23,6 @@ import io
 import importlib.resources
 import json
 import re
-import subprocess
 import tarfile
 import tempfile
 import urllib.error
@@ -37,6 +37,7 @@ from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from alerting.commands import ScheduledCommand, SCHEMA_VERSION
+from alerting.fast_ci import FAST_CI_SLACK_CHANNEL
 from alerting.full_ci import FullCIJobOutcome, FullCIRun
 from alerting.ports import (
     AlertPath,
@@ -48,7 +49,9 @@ from alerting.ports import (
 
 COMPLETENESS_THRESHOLD = 0.95
 REPORT_CHAR_LIMIT = 2800
-FULL_CI_SLACK_DESTINATION = "vllm-ci"
+# Full CI reports post through the Slack bot token to the same channel Fast CI
+# uses; no separate webhook destination.
+FULL_CI_SLACK_DESTINATION = FAST_CI_SLACK_CHANNEL
 CHECKPOINT_SCHEMA_VERSION = SCHEMA_VERSION
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
@@ -64,20 +67,6 @@ SUSPICIOUS_PRS_FILE = Path(".logs/suspicious_prs.json")
 SUMMARY_FILE = Path(".logs/nightly_summary.json")
 FULL_BUILD_FILE = Path(".logs/nightly_full.json")
 ANALYZER_AGENT_FILE = Path(".claude/agents/vllm-ci-failure-analyzer.md")
-
-DEFAULT_ANALYZER_PROMPT = (
-    "Use the Task tool to invoke the vllm-ci-failure-analyzer agent with "
-    'subagent_type "vllm-ci-failure-analyzer" and prompt: "Run CI failure '
-    "analysis. Read .logs/nightly_summary.json and execute all phases (A "
-    "through D). Credentials are available only through the environment; "
-    "never include their values in prompts or files. "
-    "The full build JSON is at .logs/nightly_full.json for job ID lookups. "
-    'REVERT_THRESHOLD is available in the environment (default 1)." Wait for '
-    "it to complete, then verify .logs/ci_report.txt was written. If it "
-    'contains "SKIP", that is fine. Otherwise verify with '
-    "`jq -Rs 'length' .logs/ci_report.txt` that the report is at most 2800 "
-    "characters; ask the agent to compact it before returning if it is longer."
-)
 
 
 class AnalyzerError(Exception):
@@ -195,10 +184,10 @@ class FullCIBuildPort(Protocol):
 
 
 class AnalyzerRunner(Protocol):
-    """Runs the existing analyzer skill in a prepared working directory."""
+    """Runs the analyzer instructions in a prepared working directory."""
 
     def run(self, working_dir: Path) -> None:
-        """Raise AnalyzerError on any LLM or subprocess failure."""
+        """Raise AnalyzerError on any LLM failure."""
         ...
 
 
@@ -586,11 +575,16 @@ class FullCIAnalysisHandler:
         )
         checkpoint = self._store.latest_checkpoint()
         if checkpoint is None:
-            raise AnalyzerError("no analyzer checkpoint is referenced")
-        blob = self._checkpoints.download(checkpoint.s3_uri)
-        if hashlib.sha256(blob).hexdigest() != checkpoint.sha256:
-            raise AnalyzerError(f"checkpoint checksum mismatch for {checkpoint.s3_uri}")
-        memory_files = unpack_checkpoint(blob)
+            # First-ever analysis has no durable memory yet; it starts empty
+            # and its own commit uploads the initial checkpoint.
+            memory_files: dict[str, bytes] = {}
+        else:
+            blob = self._checkpoints.download(checkpoint.s3_uri)
+            if hashlib.sha256(blob).hexdigest() != checkpoint.sha256:
+                raise AnalyzerError(
+                    f"checkpoint checksum mismatch for {checkpoint.s3_uri}"
+                )
+            memory_files = unpack_checkpoint(blob)
 
         commit_sha = str(build.get("commit") or context.current.commit_sha)
         with tempfile.TemporaryDirectory(prefix="full-ci-analysis-") as tmp:
@@ -633,7 +627,7 @@ class FullCIAnalysisHandler:
                     alert_ref=f"full-ci-comparison:{context.current.build_id}",
                     alert_path=AlertPath.FULL_CI,
                     delivery_mode=self._delivery_mode,
-                    destination_mode=DestinationMode.WEBHOOK,
+                    destination_mode=DestinationMode.BOT_TOKEN,
                     destination=FULL_CI_SLACK_DESTINATION,
                     payload={"text": outputs.report_text},
                 ),
@@ -760,45 +754,6 @@ class FullCIAnalysisHandler:
             summary="passed without a verified cause",
             culprit_pr=prior.culprit_pr if prior is not None else None,
         )
-
-
-class ClaudeCodeRunner:
-    """Invokes the unchanged analyzer skill through the Claude CLI."""
-
-    def __init__(
-        self,
-        *,
-        binary: str = "claude",
-        prompt: str = DEFAULT_ANALYZER_PROMPT,
-        timeout_seconds: int = 1200,
-    ) -> None:
-        self._binary = binary
-        self._prompt = prompt
-        self._timeout_seconds = timeout_seconds
-
-    def run(self, working_dir: Path) -> None:
-        try:
-            completed = subprocess.run(
-                [
-                    self._binary,
-                    "-p",
-                    self._prompt,
-                    "--allowedTools",
-                    "Read,Write,Edit,Glob,Grep,Task,Bash(curl:*)",
-                ],
-                cwd=working_dir,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_seconds,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise AnalyzerError(f"analyzer invocation failed: {exc}") from exc
-        if completed.returncode != 0:
-            tail = (completed.stderr or completed.stdout or "")[-1000:]
-            raise AnalyzerError(
-                f"analyzer exited with status {completed.returncode}: {tail}"
-            )
 
 
 class GitHubRestClient:
