@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { NotificationBadge } from "@/components/alert-notification-badge";
+import { JobName } from "@/components/job-name";
 import { type FastFailureGroup } from "@/lib/alerts-fast-ci";
 import {
   commitUrl,
@@ -62,7 +64,7 @@ function GroupCard({ group }: { group: FastFailureGroup }) {
               rel="noreferrer"
               className="min-w-0 truncate text-blue-600 hover:underline dark:text-blue-400"
             >
-              {event.jobName}
+              <JobName name={event.jobName} />
             </a>
             <span className="shrink-0 text-xs font-medium text-red-600 dark:text-red-400">
               {event.state}
@@ -92,8 +94,15 @@ function GroupCard({ group }: { group: FastFailureGroup }) {
  * Fast Failure Events are immutable observations, so this view reports them and
  * their Slack notification state only. It deliberately exposes no resolution,
  * acknowledgement, or suppression controls.
+ *
+ * A busy week can produce hundreds of groups, so the list is paginated rather
+ * than rendered to the end.
  */
+const PAGE_SIZE = 10;
+
 export function FastCIAlerts({ groups }: { groups: FastFailureGroup[] }) {
+  const [page, setPage] = useState(0);
+
   if (groups.length === 0) {
     return (
       <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-zinc-300 text-sm text-zinc-400 dark:border-zinc-700">
@@ -102,11 +111,44 @@ export function FastCIAlerts({ groups }: { groups: FastFailureGroup[] }) {
     );
   }
 
+  const pageCount = Math.ceil(groups.length / PAGE_SIZE);
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageGroups = groups.slice(
+    currentPage * PAGE_SIZE,
+    (currentPage + 1) * PAGE_SIZE,
+  );
+
   return (
     <div className="space-y-3">
-      {groups.map((group) => (
+      {pageGroups.map((group) => (
         <GroupCard key={group.key} group={group} />
       ))}
+      {pageCount > 1 && (
+        <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+          <span>
+            Page {currentPage + 1} of {pageCount} · {groups.length}{" "}
+            {groups.length === 1 ? "group" : "groups"}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={currentPage === 0}
+              onClick={() => setPage(currentPage - 1)}
+              className="dashboard-control rounded-full border border-zinc-300 px-3 py-1.5 font-semibold disabled:opacity-40 dark:border-zinc-700"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={currentPage >= pageCount - 1}
+              onClick={() => setPage(currentPage + 1)}
+              className="dashboard-control rounded-full border border-zinc-300 px-3 py-1.5 font-semibold disabled:opacity-40 dark:border-zinc-700"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

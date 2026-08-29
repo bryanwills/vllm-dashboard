@@ -1,4 +1,5 @@
 import { NotificationBadge } from "@/components/alert-notification-badge";
+import { JobName } from "@/components/job-name";
 import {
   CAUSE_LABELS,
   LIFECYCLE_LABELS,
@@ -94,7 +95,7 @@ function ConditionRow({
     <li className="px-4 py-2.5 text-sm sm:px-5">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-100">
-          {condition.jobName}
+          <JobName name={condition.jobName} />
         </span>
         <span
           className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${LIFECYCLE_CLASSES[condition.lifecycle]}`}
