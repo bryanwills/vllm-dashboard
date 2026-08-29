@@ -28,9 +28,7 @@ from alerting.runtime import HandlerCompletion
 
 INITIAL_LOOKBACK = timedelta(minutes=30)
 SAFETY_OVERLAP = timedelta(minutes=15)
-MAX_DURATION_SECONDS = 300  # 5 minutes
-
-_MAX_DURATION_LABEL = f"{MAX_DURATION_SECONDS // 60} minutes"
+MAX_DURATION_SECONDS = 30
 SLACK_BATCH_SIZE = 8
 FAST_CI_SLACK_CHANNEL = "C0ANHBE642Y"
 STALE_NOTIFICATION_AGE = timedelta(minutes=30)
@@ -323,14 +321,14 @@ def _build_message(
         heading = (
             f":rotating_light: *Fast CI recovery summary* — {len(events)} "
             f"job{'s' if len(events) != 1 else ''} failed in "
-            f"{_MAX_DURATION_LABEL} or less while notifications were unavailable"
+            f"{MAX_DURATION_SECONDS}s or less while notifications were unavailable"
         )
     else:
         suffix = f" — batch {batch_number}/{batch_count}" if batch_count > 1 else ""
         heading = (
             f":rotating_light: *Fast CI job failure alert* — {len(events)} "
             f"job{'s' if len(events) != 1 else ''} failed in "
-            f"{_MAX_DURATION_LABEL} or less{suffix}"
+            f"{MAX_DURATION_SECONDS}s or less{suffix}"
         )
     lines = [
         heading,
