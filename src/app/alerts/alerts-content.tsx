@@ -1,0 +1,240 @@
+"use client";
+
+import { useMemo, type ReactNode } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import useSWR from "swr";
+import { FastCIAlerts } from "@/components/fast-ci-alerts";
+import { FullCIAlerts } from "@/components/full-ci-alerts";
+import {
+  groupFastFailureEvents,
+  type FastFailureEvent,
+} from "@/lib/alerts-fast-ci";
+import {
+  viewFullCiComparisons,
+  type FullCiComparison,
+} from "@/lib/alerts-full-ci";
+import {
+  ALERT_TIME_WINDOWS,
+  alertWindowCutoff,
+  isAlertTimeWindow,
+  withinAlertWindow,
+  type AlertTimeWindow,
+} from "@/lib/alerts-shared";
+
+const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+type AlertTab = "fast-ci" | "full-ci";
+
+const ALERT_TABS: readonly { value: AlertTab; label: string }[] = [
+  { value: "fast-ci", label: "Fast CI" },
+  { value: "full-ci", label: "Full CI" },
+];
+
+function isAlertTab(value: string | null): value is AlertTab {
+  return ALERT_TABS.some((tab) => tab.value === value);
+}
+
+interface FullCIAlertsResponse {
+  comparisons?: FullCiComparison[];
+  error?: string;
+}
+
+interface FastCIAlertsResponse {
+  events?: FastFailureEvent[];
+  windowDays?: number;
+  error?: string;
+}
+
+/**
+ * One alert source's section: its heading, what the source means, and either
+ * its alerts, a loading placeholder, or a failure to load them.
+ */
+function AlertSection({
+  title,
+  description,
+  isLoading,
+  failed,
+  children,
+}: {
+  title: string;
+  description: ReactNode;
+  isLoading: boolean;
+  failed: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          {description}
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div
+          className="space-y-3 motion-reduce:[&_*]:animate-none"
+          aria-label={`Loading ${title} alerts`}
+          aria-busy="true"
+        >
+          {Array.from({ length: 3 }, (_, index) => (
+            <div
+              key={index}
+              className="rounded-xl border border-zinc-200 bg-white px-4 py-4 sm:px-5 dark:border-zinc-800 dark:bg-zinc-950"
+            >
+              <div className="h-4 w-40 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              <div className="mt-3 h-3 max-w-xl animate-pulse rounded bg-zinc-100 dark:bg-zinc-900" />
+            </div>
+          ))}
+        </div>
+      ) : failed ? (
+        <div className="flex h-48 items-center justify-center text-sm text-red-500">
+          Failed to load {title} alerts.
+        </div>
+      ) : (
+        children
+      )}
+    </section>
+  );
+}
+
+function FullCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
+  const { data, isLoading, error } = useSWR<FullCIAlertsResponse>(
+    "/api/alerts/full-ci",
+    fetcher,
+    { refreshInterval: 5 * 60 * 1000 },
+  );
+
+  const comparisons = useMemo(() => {
+    const cutoff = alertWindowCutoff(timeWindow);
+    return viewFullCiComparisons(
+      (data?.comparisons ?? []).filter((comparison) =>
+        withinAlertWindow(comparison.currentRun.scheduledAt, cutoff),
+      ),
+    );
+  }, [data, timeWindow]);
+
+  return (
+    <AlertSection
+      title="Full CI"
+      description="Each scheduled Full CI run compared with the run before it. New and
+        recurring failure conditions are listed apart from the ones a comparison
+        saw pass again, and every condition is shown against the two runs it was
+        classified from."
+      isLoading={isLoading}
+      failed={Boolean(error || data?.error)}
+    >
+      <FullCIAlerts comparisons={comparisons} />
+    </AlertSection>
+  );
+}
+
+function FastCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
+  const { data, isLoading, error } = useSWR<FastCIAlertsResponse>(
+    "/api/alerts/fast-ci",
+    fetcher,
+    { refreshInterval: 5 * 60 * 1000 },
+  );
+
+  const groups = useMemo(() => {
+    const cutoff = alertWindowCutoff(timeWindow);
+    return groupFastFailureEvents(
+      (data?.events ?? []).filter((event) =>
+        withinAlertWindow(event.finishedAt, cutoff),
+      ),
+    );
+  }, [data, timeWindow]);
+
+  return (
+    <AlertSection
+      title="Fast CI"
+      description={`Fast CI jobs that finished in a failure state within 30 seconds, over the last ${data?.windowDays ?? 7} days, grouped by the build and commit they came from. These are observations with no resolution lifecycle; each one shows how far its Slack notification got.`}
+      isLoading={isLoading}
+      failed={Boolean(error || data?.error)}
+    >
+      <FastCIAlerts groups={groups} />
+    </AlertSection>
+  );
+}
+
+export default function AlertsContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const tabParam = searchParams.get("tab");
+  const tab: AlertTab = isAlertTab(tabParam) ? tabParam : "fast-ci";
+  const windowParam = searchParams.get("window");
+  const timeWindow: AlertTimeWindow = isAlertTimeWindow(windowParam)
+    ? windowParam
+    : "7d";
+
+  const navigate = (nextTab: AlertTab, nextWindow: AlertTimeWindow) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", nextTab);
+    params.set("window", nextWindow);
+    router.replace(`/alerts?${params.toString()}`);
+  };
+
+  return (
+    <div className="space-y-8">
+      <h1 className="text-2xl font-semibold tracking-tight">Alerts</h1>
+
+      <div
+        role="tablist"
+        aria-label="Alert sources"
+        className="flex gap-6 border-b border-zinc-200 dark:border-zinc-800"
+      >
+        {ALERT_TABS.map((item) => {
+          const active = item.value === tab;
+          return (
+            <button
+              key={item.value}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => navigate(item.value, timeWindow)}
+              className={`dashboard-control -mb-px inline-flex min-h-11 items-center border-b-2 text-sm font-semibold sm:min-h-10 ${
+                active
+                  ? "border-zinc-950 text-zinc-950 dark:border-zinc-50 dark:text-zinc-50"
+                  : "border-transparent text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
+              }`}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        role="group"
+        aria-label="Time window"
+        className="flex flex-wrap items-center gap-2"
+      >
+        {ALERT_TIME_WINDOWS.map((item) => {
+          const active = item.value === timeWindow;
+          return (
+            <button
+              key={item.value}
+              type="button"
+              aria-pressed={active}
+              onClick={() => navigate(tab, item.value)}
+              className={`dashboard-control rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                active
+                  ? "border-zinc-950 bg-zinc-950 text-zinc-50 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
+                  : "border-zinc-300 text-zinc-500 hover:text-zinc-950 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-50"
+              }`}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "fast-ci" ? (
+        <FastCISection timeWindow={timeWindow} />
+      ) : (
+        <FullCISection timeWindow={timeWindow} />
+      )}
+    </div>
+  );
+}

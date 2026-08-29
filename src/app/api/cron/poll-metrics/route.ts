@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, initSchema } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { fetchBuildkiteQueueSnapshots } from "@/lib/buildkite-queue-metrics";
 
 export const maxDuration = 55;
-
-let schemaInitialized = false;
 
 export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
@@ -25,11 +23,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDb();
-
-    if (!schemaInitialized) {
-      await initSchema();
-      schemaInitialized = true;
-    }
 
     const now = new Date();
     const snapshots = await fetchBuildkiteQueueSnapshots(

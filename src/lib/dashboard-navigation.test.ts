@@ -5,8 +5,15 @@ import {
   TOP_LEVEL_NAV_ITEMS,
 } from "./dashboard-navigation";
 
-test("CI Health owns builds, jobs, queue, tests, and nightly routes", () => {
-  for (const pathname of ["/", "/jobs", "/queue", "/tests", "/nightly"]) {
+test("CI Health owns builds, jobs, queue, tests, nightly, and alerts routes", () => {
+  for (const pathname of [
+    "/",
+    "/jobs",
+    "/queue",
+    "/tests",
+    "/nightly",
+    "/alerts",
+  ]) {
     assert.equal(sectionForPathname(pathname)?.label, "CI Health");
   }
 
@@ -16,6 +23,7 @@ test("CI Health owns builds, jobs, queue, tests, and nightly routes", () => {
     "/queue",
     "/tests",
     "/nightly",
+    "/alerts",
   ]);
 });
 

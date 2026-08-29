@@ -13,6 +13,15 @@
 # testing
 /coverage
 
+# Python alerting package
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
 # next.js
 /.next/
 /out/

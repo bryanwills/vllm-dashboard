@@ -8,8 +8,7 @@
     "start": "next start",
     "test": "tsx --test src/**/*.test.ts",
     "lint": "eslint",
-    "migrate:gpu-rollups": "node scripts/migrate-gpu-rollups.mjs",
-    "migrate:otel": "node scripts/migrate-otel.mjs",
+    "migrate": "uv run --project migrations vllm-dashboard-migrate",
     "configure:buildkite-otel": "node scripts/configure-buildkite-otel.mjs"
   },
   "dependencies": {

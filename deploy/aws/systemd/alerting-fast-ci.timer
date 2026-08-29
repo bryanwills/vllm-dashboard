@@ -1,0 +1,13 @@
+[Unit]
+Description=Schedule Fast CI reconciliation every 15 minutes in Pacific time
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* *:00/15:00 America/Los_Angeles
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=0
+Unit=alerting-fast-ci.service
+
+[Install]
+WantedBy=timers.target

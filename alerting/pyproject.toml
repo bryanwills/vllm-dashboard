@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alerting"
+version = "0.1.0"
+description = "Runtime core for the vLLM CI alerting service: idempotent command processing and the Slack notification outbox."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+vllm-alerting-import = "alerting.migration:main"
+vllm-alerting-cutover = "alerting.cutover:main"
+
+[project.optional-dependencies]
+aws = ["boto3>=1.35"]
+postgres = ["psycopg[binary]>=3.2"]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.11",
+    "psycopg[binary]>=3.2",
+    "ruff==0.14.0",
+]
+
+[tool.setuptools]
+packages = ["alerting"]
+package-dir = {alerting = "."}
+
+[tool.setuptools.package-data]
+alerting = ["assets/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
