@@ -100,13 +100,21 @@ function GroupCard({ group }: { group: FastFailureGroup }) {
  */
 const PAGE_SIZE = 10;
 
-export function FastCIAlerts({ groups }: { groups: FastFailureGroup[] }) {
+export function FastCIAlerts({
+  groups,
+  softFailedOnly = false,
+}: {
+  groups: FastFailureGroup[];
+  softFailedOnly?: boolean;
+}) {
   const [page, setPage] = useState(0);
 
   if (groups.length === 0) {
     return (
       <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-zinc-300 text-sm text-zinc-400 dark:border-zinc-700">
-        No Fast CI failures were recorded in this window.
+        {softFailedOnly
+          ? "No soft-failed Fast CI failures were recorded in this window."
+          : "No Fast CI failures were recorded in this window."}
       </div>
     );
   }

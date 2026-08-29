@@ -129,7 +129,13 @@ function FullCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
   );
 }
 
-function FastCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
+function FastCISection({
+  timeWindow,
+  softFailedOnly,
+}: {
+  timeWindow: AlertTimeWindow;
+  softFailedOnly: boolean;
+}) {
   const { data, isLoading, error } = useSWR<FastCIAlertsResponse>(
     "/api/alerts/fast-ci",
     fetcher,
@@ -139,11 +145,13 @@ function FastCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
   const groups = useMemo(() => {
     const cutoff = alertWindowCutoff(timeWindow);
     return groupFastFailureEvents(
-      (data?.events ?? []).filter((event) =>
-        withinAlertWindow(event.finishedAt, cutoff),
+      (data?.events ?? []).filter(
+        (event) =>
+          withinAlertWindow(event.finishedAt, cutoff) &&
+          (!softFailedOnly || event.softFailed),
       ),
     );
-  }, [data, timeWindow]);
+  }, [data, timeWindow, softFailedOnly]);
 
   return (
     <AlertSection
@@ -152,7 +160,7 @@ function FastCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
       isLoading={isLoading}
       failed={Boolean(error || data?.error)}
     >
-      <FastCIAlerts groups={groups} />
+      <FastCIAlerts groups={groups} softFailedOnly={softFailedOnly} />
     </AlertSection>
   );
 }
@@ -167,11 +175,21 @@ export default function AlertsContent() {
   const timeWindow: AlertTimeWindow = isAlertTimeWindow(windowParam)
     ? windowParam
     : "7d";
+  const softFailedOnly = searchParams.get("soft") === "only";
 
-  const navigate = (nextTab: AlertTab, nextWindow: AlertTimeWindow) => {
+  const navigate = (
+    nextTab: AlertTab,
+    nextWindow: AlertTimeWindow,
+    nextSoftFailedOnly: boolean,
+  ) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", nextTab);
     params.set("window", nextWindow);
+    if (nextSoftFailedOnly) {
+      params.set("soft", "only");
+    } else {
+      params.delete("soft");
+    }
     router.replace(`/alerts?${params.toString()}`);
   };
 
@@ -192,7 +210,7 @@ export default function AlertsContent() {
               type="button"
               role="tab"
               aria-selected={active}
-              onClick={() => navigate(item.value, timeWindow)}
+              onClick={() => navigate(item.value, timeWindow, softFailedOnly)}
               className={`dashboard-control -mb-px inline-flex min-h-11 items-center border-b-2 text-sm font-semibold sm:min-h-10 ${
                 active
                   ? "border-zinc-950 text-zinc-950 dark:border-zinc-50 dark:text-zinc-50"
@@ -205,33 +223,49 @@ export default function AlertsContent() {
         })}
       </div>
 
-      <div
-        role="group"
-        aria-label="Time window"
-        className="flex flex-wrap items-center gap-2"
-      >
-        {ALERT_TIME_WINDOWS.map((item) => {
-          const active = item.value === timeWindow;
-          return (
-            <button
-              key={item.value}
-              type="button"
-              aria-pressed={active}
-              onClick={() => navigate(tab, item.value)}
-              className={`dashboard-control rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                active
-                  ? "border-zinc-950 bg-zinc-950 text-zinc-50 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
-                  : "border-zinc-300 text-zinc-500 hover:text-zinc-950 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-50"
-              }`}
-            >
-              {item.label}
-            </button>
-          );
-        })}
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          role="group"
+          aria-label="Time window"
+          className="flex flex-wrap items-center gap-2"
+        >
+          {ALERT_TIME_WINDOWS.map((item) => {
+            const active = item.value === timeWindow;
+            return (
+              <button
+                key={item.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => navigate(tab, item.value, softFailedOnly)}
+                className={`dashboard-control rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                  active
+                    ? "border-zinc-950 bg-zinc-950 text-zinc-50 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
+                    : "border-zinc-300 text-zinc-500 hover:text-zinc-950 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-50"
+                }`}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+        {tab === "fast-ci" && (
+          <button
+            type="button"
+            aria-pressed={softFailedOnly}
+            onClick={() => navigate(tab, timeWindow, !softFailedOnly)}
+            className={`dashboard-control rounded-full border px-3 py-1.5 text-xs font-semibold ${
+              softFailedOnly
+                ? "border-zinc-950 bg-zinc-950 text-zinc-50 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
+                : "border-zinc-300 text-zinc-500 hover:text-zinc-950 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-50"
+            }`}
+          >
+            Soft failed only
+          </button>
+        )}
       </div>
 
       {tab === "fast-ci" ? (
-        <FastCISection timeWindow={timeWindow} />
+        <FastCISection timeWindow={timeWindow} softFailedOnly={softFailedOnly} />
       ) : (
         <FullCISection timeWindow={timeWindow} />
       )}
