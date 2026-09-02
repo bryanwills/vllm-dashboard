@@ -224,9 +224,7 @@ interface BuildChartProps {
 }
 
 export function BuildChart({ data, startDate, endDate, hideOutliers }: BuildChartProps) {
-  const [mode, setMode] = useState<ChartMode>(() =>
-    data.length > 500 ? "overview" : "runs",
-  );
+  const [mode, setMode] = useState<ChartMode>("runs");
   const rangeLabel =
     startDate && endDate ? `${startDate} — ${endDate}` : "All Time";
 
@@ -346,8 +344,8 @@ export function BuildChart({ data, startDate, endDate, hideOutliers }: BuildChar
           aria-label="Build duration chart mode"
         >
           {([
-            ["overview", "Overview"],
             ["runs", "Runs"],
+            ["overview", "Overview"],
           ] as const).map(([value, label]) => (
             <button
               key={value}
