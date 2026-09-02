@@ -34,6 +34,64 @@ function isAlertTab(value: string | null): value is AlertTab {
   return ALERT_TABS.some((tab) => tab.value === value);
 }
 
+/**
+ * The job-category hides are view options, not data filters: they only remove
+ * matching job names from the rendered list, and they ride in the URL like the
+ * other alert controls.
+ */
+type HideOption = "softfail" | "optional" | "amd";
+
+const HIDE_OPTIONS: readonly { value: HideOption; label: string }[] = [
+  { value: "softfail", label: "Hide soft-fail jobs" },
+  { value: "optional", label: "Hide optional jobs" },
+  { value: "amd", label: "Hide AMD jobs" },
+];
+
+interface AlertOptions {
+  showSoftFailed: boolean;
+  hide: ReadonlySet<HideOption>;
+}
+
+function ToggleSwitch({
+  checked,
+  onToggle,
+  label,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onToggle}
+      className={`dashboard-control inline-flex items-center gap-2 text-xs font-semibold ${
+        checked
+          ? "text-zinc-950 dark:text-zinc-50"
+          : "text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-colors duration-150 ${
+          checked
+            ? "border-zinc-950 bg-zinc-950 dark:border-zinc-50 dark:bg-zinc-50"
+            : "border-zinc-300 bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800"
+        }`}
+      >
+        <span
+          className={`h-3.5 w-3.5 rounded-full bg-white transition-transform duration-150 motion-reduce:transition-none ${
+            checked ? "translate-x-4 dark:bg-zinc-950" : "translate-x-0 dark:bg-zinc-400"
+          }`}
+        />
+      </span>
+      {label}
+    </button>
+  );
+}
+
 interface FastCIAlertsResponse {
   events?: FastFailureEvent[];
   windowDays?: number;
@@ -99,8 +157,14 @@ function AlertSection({
   );
 }
 
-function MainCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
-  const { data, isLoading, error } = useSWR<MainCIAlertsResponse>(
+function MainCISection({
+  timeWindow,
+  options,
+}: {
+  timeWindow: AlertTimeWindow;
+  options: AlertOptions;
+}) {
+  const { data, isLoading, error, mutate } = useSWR<MainCIAlertsResponse>(
     "/api/alerts/main-ci",
     fetcher,
     { refreshInterval: 5 * 60 * 1000 },
@@ -115,10 +179,22 @@ function MainCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
     [data, timeWindow],
   );
 
+  const resolveAlert = async (alertId: string) => {
+    const response = await fetch("/api/alerts/main-ci/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alertId: Number(alertId) }),
+    });
+    if (!response.ok) {
+      throw new Error(`Resolve failed with ${response.status}`);
+    }
+    await mutate();
+  };
+
   return (
     <AlertSection
       title="Failures"
-      description="Hard command-job failures on the main branch. A failure stays open across builds until that exact Buildkite step positively passes again; soft failures, missing jobs, and older builds finishing late do not resolve it."
+      description="Hard command-job failures on the main branch. A failure stays open across builds until that exact Buildkite step positively passes again; soft failures, missing jobs, and older builds finishing late do not resolve it. Resolving an alert by hand closes it without waiting for a pass."
       isLoading={isLoading}
       failed={Boolean(error || data?.error)}
     >
@@ -128,7 +204,13 @@ function MainCISection({ timeWindow }: { timeWindow: AlertTimeWindow }) {
           must be deployed before this preview can show alerts.
         </div>
       ) : (
-        <MainCIAlerts alerts={alerts} />
+        <MainCIAlerts
+          alerts={alerts}
+          onResolve={resolveAlert}
+          hideSoftFail={options.hide.has("softfail")}
+          hideOptional={options.hide.has("optional")}
+          hideAmd={options.hide.has("amd")}
+        />
       )}
     </AlertSection>
   );
@@ -180,22 +262,51 @@ export default function AlertsContent() {
   const timeWindow: AlertTimeWindow = isAlertTimeWindow(windowParam)
     ? windowParam
     : "7d";
-  const showSoftFailed = searchParams.get("soft") === "show";
+  const options: AlertOptions = {
+    showSoftFailed: searchParams.get("soft") === "show",
+    hide: new Set(
+      (searchParams.get("hide") ?? "")
+        .split(",")
+        .filter((value): value is HideOption =>
+          HIDE_OPTIONS.some((option) => option.value === value),
+        ),
+    ),
+  };
 
   const navigate = (
     nextTab: AlertTab,
     nextWindow: AlertTimeWindow,
-    nextShowSoftFailed: boolean,
+    nextOptions: AlertOptions,
   ) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", nextTab);
     params.set("window", nextWindow);
-    if (nextShowSoftFailed) {
+    if (nextOptions.showSoftFailed) {
       params.set("soft", "show");
     } else {
       params.delete("soft");
     }
+    if (nextOptions.hide.size > 0) {
+      params.set(
+        "hide",
+        HIDE_OPTIONS.filter((option) => nextOptions.hide.has(option.value))
+          .map((option) => option.value)
+          .join(","),
+      );
+    } else {
+      params.delete("hide");
+    }
     router.replace(`/alerts?${params.toString()}`);
+  };
+
+  const toggleHide = (option: HideOption) => {
+    const hide = new Set(options.hide);
+    if (hide.has(option)) {
+      hide.delete(option);
+    } else {
+      hide.add(option);
+    }
+    navigate(tab, timeWindow, { ...options, hide });
   };
 
   return (
@@ -215,7 +326,7 @@ export default function AlertsContent() {
               type="button"
               role="tab"
               aria-selected={active}
-              onClick={() => navigate(item.value, timeWindow, showSoftFailed)}
+              onClick={() => navigate(item.value, timeWindow, options)}
               className={`dashboard-control -mb-px inline-flex min-h-11 items-center border-b-2 text-sm font-semibold sm:min-h-10 ${
                 active
                   ? "border-zinc-950 text-zinc-950 dark:border-zinc-50 dark:text-zinc-50"
@@ -241,7 +352,7 @@ export default function AlertsContent() {
                 key={item.value}
                 type="button"
                 aria-pressed={active}
-                onClick={() => navigate(tab, item.value, showSoftFailed)}
+                onClick={() => navigate(tab, item.value, options)}
                 className={`dashboard-control rounded-full border px-3 py-1.5 text-xs font-semibold ${
                   active
                     ? "border-zinc-950 bg-zinc-950 text-zinc-50 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
@@ -254,42 +365,35 @@ export default function AlertsContent() {
           })}
         </div>
         {tab === "fast-ci" && (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={showSoftFailed}
-            onClick={() => navigate(tab, timeWindow, !showSoftFailed)}
-            className={`dashboard-control inline-flex items-center gap-2 text-xs font-semibold ${
-              showSoftFailed
-                ? "text-zinc-950 dark:text-zinc-50"
-                : "text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
-            }`}
-          >
-            <span
-              aria-hidden="true"
-              className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-colors duration-150 ${
-                showSoftFailed
-                  ? "border-zinc-950 bg-zinc-950 dark:border-zinc-50 dark:bg-zinc-50"
-                  : "border-zinc-300 bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800"
-              }`}
-            >
-              <span
-                className={`h-3.5 w-3.5 rounded-full bg-white transition-transform duration-150 motion-reduce:transition-none ${
-                  showSoftFailed
-                    ? "translate-x-4 dark:bg-zinc-950"
-                    : "translate-x-0 dark:bg-zinc-400"
-                }`}
-              />
-            </span>
-            Show soft failed
-          </button>
+          <ToggleSwitch
+            checked={options.showSoftFailed}
+            onToggle={() =>
+              navigate(tab, timeWindow, {
+                ...options,
+                showSoftFailed: !options.showSoftFailed,
+              })
+            }
+            label="Show soft failed"
+          />
         )}
+        {tab === "main-ci" &&
+          HIDE_OPTIONS.map((option) => (
+            <ToggleSwitch
+              key={option.value}
+              checked={options.hide.has(option.value)}
+              onToggle={() => toggleHide(option.value)}
+              label={option.label}
+            />
+          ))}
       </div>
 
       {tab === "main-ci" ? (
-        <MainCISection timeWindow={timeWindow} />
+        <MainCISection timeWindow={timeWindow} options={options} />
       ) : (
-        <FastCISection timeWindow={timeWindow} showSoftFailed={showSoftFailed} />
+        <FastCISection
+          timeWindow={timeWindow}
+          showSoftFailed={options.showSoftFailed}
+        />
       )}
     </div>
   );

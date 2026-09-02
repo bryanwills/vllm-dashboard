@@ -2,6 +2,9 @@
 
 export type MainCiAlertStatus = "open" | "resolved";
 
+/** How a resolved alert was closed: an observed pass, or a manual dismiss. */
+export type MainCiResolutionKind = "pass" | "manual";
+
 export type MainCiAnalysisClassification =
   | "infra"
   | "flaky"
@@ -54,6 +57,7 @@ export interface MainCiJobAlert {
   failureCount: number;
   resolvedAt: string | null;
   resolution: MainCiOutcomeRef | null;
+  resolutionKind: MainCiResolutionKind | null;
   analysis: MainCiJobAnalysis | null;
 }
 
@@ -86,6 +90,7 @@ export interface MainCiJobAlertRow {
   resolution_build_url: string | null;
   resolution_job_url: string | null;
   resolution_commit_sha: string | null;
+  resolution_kind: MainCiResolutionKind | null;
   analysis_analyzed_failure_job_id: string | null;
   analysis_classification: MainCiAnalysisClassification | null;
   analysis_confidence: MainCiAnalysisConfidence | null;
@@ -212,6 +217,7 @@ export function toMainCiJobAlert(row: MainCiJobAlertRow): MainCiJobAlert {
     failureCount: Number(row.failure_count),
     resolvedAt: row.resolved_at?.toISOString() ?? null,
     resolution,
+    resolutionKind: row.resolution_kind,
     analysis: toMainCiJobAnalysis(row),
   };
 }
@@ -234,4 +240,25 @@ export function viewMainCiJobAlerts(
       const bTime = b.resolvedAt ?? b.lastFailure.finishedAt;
       return bTime.localeCompare(aTime) || a.jobName.localeCompare(b.jobName);
     });
+}
+
+/**
+ * Job-category helpers for the hide toggles on the alerts page. The Main CI
+ * pipeline runs on Buildkite, where a soft-fail or optional step still alerts
+ * when it fails hard enough to be observed; these names let a responder set
+ * those aside. Matching is name-based because the alert rows do not carry the
+ * Buildkite step's `soft_fail`/`optional` flags.
+ */
+const AMD_JOB_NAME = /(?:^|[\s:([])(?:amd|mi\d{3}|rocm)(?:[\s:)\]_]|$)/i;
+
+export function isAmdJobName(jobName: string): boolean {
+  return AMD_JOB_NAME.test(jobName);
+}
+
+export function isSoftFailJobName(jobName: string): boolean {
+  return jobName.toLowerCase().includes("soft-fail");
+}
+
+export function isOptionalJobName(jobName: string): boolean {
+  return jobName.toLowerCase().includes("optional");
 }

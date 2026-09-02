@@ -57,6 +57,7 @@ function alert(overrides: Partial<MainCiJobAlert> = {}): MainCiJobAlert {
     failureCount: 2,
     resolvedAt: null,
     resolution: null,
+    resolutionKind: null,
     analysis: null,
     ...overrides,
   };
@@ -169,4 +170,76 @@ test("resolved alert renders the exact pass that closed it", () => {
   assert.match(markup, /Resolved/);
   assert.match(markup, /Passed again/);
   assert.match(markup, /https:\/\/buildkite\.com\/vllm\/ci\/builds\/102/);
+});
+
+test("open rows offer a resolve button when a handler is provided", () => {
+  const markup = renderToStaticMarkup(
+    createElement(MainCIAlerts, {
+      alerts: [alert()],
+      onResolve: async () => {},
+    }),
+  );
+
+  assert.match(markup, />Resolve</);
+});
+
+test("no resolve button without a handler or on resolved rows", () => {
+  const withoutHandler = renderToStaticMarkup(
+    createElement(MainCIAlerts, { alerts: [alert()] }),
+  );
+  assert.doesNotMatch(withoutHandler, />Resolve</);
+
+  const resolved = renderToStaticMarkup(
+    createElement(MainCiAlertRow, {
+      alert: alert({ status: "resolved", resolvedAt: "2026-08-29T09:30:00.000Z" }),
+      onResolve: async () => {},
+    }),
+  );
+  assert.doesNotMatch(resolved, />Resolve</);
+});
+
+test("manual resolution is labeled and does not claim a passing run", () => {
+  const markup = renderToStaticMarkup(
+    createElement(MainCiAlertRow, {
+      alert: alert({
+        status: "resolved",
+        resolvedAt: "2026-08-29T09:30:00.000Z",
+        resolution: alert().lastFailure,
+        resolutionKind: "manual",
+      }),
+    }),
+  );
+
+  assert.match(markup, /Resolved manually/);
+  assert.match(markup, /no passing run was observed/);
+  assert.doesNotMatch(markup, /Passed again/);
+});
+
+test("hide options filter matching job names out of the list", () => {
+  const alerts = [
+    alert({ alertId: "1", jobName: "GPU test" }),
+    alert({ alertId: "2", jobName: "AMD: MI300X Test" }),
+    alert({ alertId: "3", jobName: "Lint (soft-fail)" }),
+    alert({ alertId: "4", jobName: "Optional check" }),
+  ];
+
+  const visible = renderToStaticMarkup(
+    createElement(MainCIAlerts, { alerts }),
+  );
+  assert.match(visible, /AMD: MI300X Test/);
+  assert.match(visible, /Lint \(soft-fail\)/);
+  assert.match(visible, /Optional check/);
+
+  const hidden = renderToStaticMarkup(
+    createElement(MainCIAlerts, {
+      alerts,
+      hideAmd: true,
+      hideSoftFail: true,
+      hideOptional: true,
+    }),
+  );
+  assert.match(hidden, /GPU test/);
+  assert.doesNotMatch(hidden, /AMD: MI300X Test/);
+  assert.doesNotMatch(hidden, /Lint \(soft-fail\)/);
+  assert.doesNotMatch(hidden, /Optional check/);
 });

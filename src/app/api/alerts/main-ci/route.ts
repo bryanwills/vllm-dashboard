@@ -25,7 +25,7 @@ export async function GET() {
              a.last_failure_commit_sha, a.failure_count,
              a.resolved_at, a.resolution_job_id, a.resolution_build_id,
              a.resolution_build_number, a.resolution_build_url,
-             a.resolution_job_url, a.resolution_commit_sha,
+             a.resolution_job_url, a.resolution_commit_sha, a.resolution_kind,
              an.analyzed_failure_job_id AS analysis_analyzed_failure_job_id,
              an.classification AS analysis_classification,
              an.confidence AS analysis_confidence,

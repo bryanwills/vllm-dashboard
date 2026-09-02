@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
 import { JobName } from "@/components/job-name";
 import {
+  isAmdJobName,
+  isOptionalJobName,
+  isSoftFailJobName,
   type MainCiAnalysisClassification,
   type MainCiJobAlert,
   type MainCiJobAnalysis,
@@ -185,7 +188,28 @@ function AnalysisPanel({ analysis }: { analysis: MainCiJobAnalysis | null }) {
   );
 }
 
-export function MainCiAlertRow({ alert }: { alert: MainCiJobAlert }) {
+export function MainCiAlertRow({
+  alert,
+  onResolve,
+}: {
+  alert: MainCiJobAlert;
+  onResolve?: (alertId: string) => Promise<void>;
+}) {
+  const [resolving, setResolving] = useState(false);
+  const [resolveError, setResolveError] = useState(false);
+
+  const resolve = async () => {
+    if (!onResolve || resolving) return;
+    setResolving(true);
+    setResolveError(false);
+    try {
+      await onResolve(alert.alertId);
+    } catch {
+      setResolveError(true);
+      setResolving(false);
+    }
+  };
+
   return (
     <details className="group overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 sm:px-5 [&::-webkit-details-marker]:hidden">
@@ -201,7 +225,11 @@ export function MainCiAlertRow({ alert }: { alert: MainCiJobAlert }) {
         <span
           className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_CLASSES[alert.status]}`}
         >
-          {alert.status === "open" ? "Open" : "Resolved"}
+          {alert.status === "open"
+            ? "Open"
+            : alert.resolutionKind === "manual"
+              ? "Resolved manually"
+              : "Resolved"}
         </span>
         {alert.analysis && <ClassificationBadge analysis={alert.analysis} />}
         <span className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -215,9 +243,28 @@ export function MainCiAlertRow({ alert }: { alert: MainCiJobAlert }) {
               alert.resolvedAt ?? alert.lastFailure.finishedAt,
             )}
           </span>
+          {alert.status === "open" && onResolve && (
+            <button
+              type="button"
+              disabled={resolving}
+              onClick={(event) => {
+                // Keep the row from toggling open when resolving.
+                event.preventDefault();
+                void resolve();
+              }}
+              className="dashboard-control rounded-full border border-zinc-300 px-2.5 py-1 text-[10px] font-semibold text-zinc-500 hover:text-zinc-950 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-50"
+            >
+              {resolving ? "Resolving…" : "Resolve"}
+            </button>
+          )}
         </span>
       </summary>
       <div className="space-y-2 border-t border-zinc-200 px-4 py-3 text-xs sm:px-5 dark:border-zinc-800">
+        {resolveError && (
+          <p className="text-xs font-medium text-red-600 dark:text-red-400">
+            Could not resolve this alert. Try again.
+          </p>
+        )}
         <div className="space-y-1">
           <BuildLink
             label="First failure"
@@ -234,13 +281,18 @@ export function MainCiAlertRow({ alert }: { alert: MainCiJobAlert }) {
               jobUrl={alert.lastFailure.jobUrl}
             />
           )}
-          {alert.resolution && (
+          {alert.resolution && alert.resolutionKind !== "manual" && (
             <BuildLink
               label="Passed again"
               buildNumber={alert.resolution.buildNumber}
               buildUrl={alert.resolution.buildUrl}
               jobUrl={alert.resolution.jobUrl}
             />
+          )}
+          {alert.status === "resolved" && alert.resolutionKind === "manual" && (
+            <p className="text-zinc-500 dark:text-zinc-400">
+              Resolved manually — no passing run was observed.
+            </p>
           )}
           <a
             href={commitUrl(alert.lastFailure.commitSha)}
@@ -257,7 +309,19 @@ export function MainCiAlertRow({ alert }: { alert: MainCiJobAlert }) {
   );
 }
 
-export function MainCIAlerts({ alerts }: { alerts: MainCiJobAlert[] }) {
+export function MainCIAlerts({
+  alerts,
+  onResolve,
+  hideSoftFail = false,
+  hideOptional = false,
+  hideAmd = false,
+}: {
+  alerts: MainCiJobAlert[];
+  onResolve?: (alertId: string) => Promise<void>;
+  hideSoftFail?: boolean;
+  hideOptional?: boolean;
+  hideAmd?: boolean;
+}) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
   const [classificationFilter, setClassificationFilter] =
     useState<ClassificationFilter | null>(null);
@@ -282,6 +346,9 @@ export function MainCIAlerts({ alerts }: { alerts: MainCiJobAlert[] }) {
     const needle = query.trim().toLowerCase();
     return alerts.filter((alert) => {
       if (statusFilter !== "all" && alert.status !== statusFilter) return false;
+      if (hideSoftFail && isSoftFailJobName(alert.jobName)) return false;
+      if (hideOptional && isOptionalJobName(alert.jobName)) return false;
+      if (hideAmd && isAmdJobName(alert.jobName)) return false;
       if (needle && !alert.jobName.toLowerCase().includes(needle)) return false;
       if (classificationFilter === "unanalyzed") return alert.analysis === null;
       if (classificationFilter !== null) {
@@ -289,7 +356,7 @@ export function MainCIAlerts({ alerts }: { alerts: MainCiJobAlert[] }) {
       }
       return true;
     });
-  }, [alerts, statusFilter, classificationFilter, query]);
+  }, [alerts, statusFilter, classificationFilter, query, hideSoftFail, hideOptional, hideAmd]);
 
   if (alerts.length === 0) {
     return (
@@ -362,7 +429,11 @@ export function MainCIAlerts({ alerts }: { alerts: MainCiJobAlert[] }) {
       ) : (
         <div className="space-y-3">
           {visible.map((alert) => (
-            <MainCiAlertRow key={alert.alertId} alert={alert} />
+            <MainCiAlertRow
+              key={alert.alertId}
+              alert={alert}
+              onResolve={onResolve}
+            />
           ))}
         </div>
       )}

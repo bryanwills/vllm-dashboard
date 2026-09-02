@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isAmdJobName,
+  isOptionalJobName,
+  isSoftFailJobName,
   toMainCiJobAlert,
   viewMainCiJobAlerts,
   type MainCiJobAlertRow,
@@ -38,6 +41,7 @@ function alertRow(
     resolution_build_url: null,
     resolution_job_url: null,
     resolution_commit_sha: null,
+    resolution_kind: null,
     analysis_analyzed_failure_job_id: null,
     analysis_classification: null,
     analysis_confidence: null,
@@ -179,3 +183,39 @@ test("open alerts survive the time filter and sort ahead of resolved history", (
   );
 });
 
+
+test("resolution kind maps through, defaulting to null while open", () => {
+  assert.equal(toMainCiJobAlert(alertRow()).resolutionKind, null);
+
+  const manual = toMainCiJobAlert(
+    alertRow({
+      status: "resolved",
+      resolved_at: new Date("2026-08-29T09:30:00.000Z"),
+      resolution_job_id: "job-2",
+      resolution_build_id: "build-101",
+      resolution_build_number: 101,
+      resolution_build_url: "https://buildkite.com/vllm/ci/builds/101",
+      resolution_job_url: "https://example.test/job-2",
+      resolution_commit_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      resolution_kind: "manual",
+    }),
+  );
+  assert.equal(manual.resolutionKind, "manual");
+});
+
+test("AMD job names match hardware tokens without hitting plain words", () => {
+  assert.equal(isAmdJobName("AMD: MI300X Test"), true);
+  assert.equal(isAmdJobName(":amd: GPU Correctness"), true);
+  assert.equal(isAmdJobName("mi325_1: kernels test"), true);
+  assert.equal(isAmdJobName("ROCm build"), true);
+  assert.equal(isAmdJobName("GPU test"), false);
+  // "amd" inside another word is not an AMD job.
+  assert.equal(isAmdJobName("amdgpu driver check"), false);
+});
+
+test("soft-fail and optional job names match their Buildkite labels", () => {
+  assert.equal(isSoftFailJobName("Lint (soft-fail)"), true);
+  assert.equal(isSoftFailJobName("GPU test"), false);
+  assert.equal(isOptionalJobName("Optional check"), true);
+  assert.equal(isOptionalJobName("GPU test"), false);
+});
