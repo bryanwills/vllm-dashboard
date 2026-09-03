@@ -323,6 +323,15 @@ def build_disk_entries(node_name, fs_map, rootfs_capacity):
     disks = []
     for device in sorted(fs_map):
         entry = fs_map[device]
+        # Skip loop devices (snap/squashfs images, e.g. 30 of them on the
+        # dgx hosts that also run a host-level buildkite-agent): read-only
+        # mounts that can never fill, pure noise in the drill-down. Also
+        # skip zero-capacity devices (e.g. unbacked /dev/loopN): nothing can
+        # fill them, and the ingestion contract requires total_bytes >= 1.
+        if device.startswith("/dev/loop"):
+            continue
+        if not entry["total_bytes"]:
+            continue
         disks.append({
             # cAdvisor labels by device, so the true mount point is unknown
             # and mount_point stays null (the server accepts a disk with

@@ -168,6 +168,31 @@ def test_unknown_pool_root_falls_back_to_system(reporter_k8s):
     assert roles == {"/dev/md127": "system", "/dev/md0": "other"}
 
 
+def test_zero_capacity_devices_are_skipped(reporter_k8s):
+    # Live failure: inf-4x8h100-4's cAdvisor reports an unbacked /dev/loop0
+    # with total_bytes 0, and the ingestion contract requires total >= 1 —
+    # the whole node payload was rejected (HTTP 400) until these are dropped.
+    fs_map = {
+        "/dev/loop0": {"used_bytes": 0, "total_bytes": 0},
+        "/dev/vda1": {"used_bytes": 1, "total_bytes": 243379802112},
+    }
+    disks = reporter_k8s.build_disk_entries("inf-4x8h100-4", fs_map, 243379802112)
+    assert [d["device"] for d in disks] == ["/dev/vda1"]
+
+
+def test_loop_devices_are_skipped(reporter_k8s):
+    # dgxb200-12/-14 (host-level buildkite-agent, snap packages) report ~30
+    # snap loop mounts via cAdvisor: read-only squashfs, can never fill,
+    # pure drill-down noise.
+    fs_map = {
+        "/dev/loop0": {"used_bytes": 66846720, "total_bytes": 66846720},
+        "/dev/loop17": {"used_bytes": 52428800, "total_bytes": 52428800},
+        "/dev/md0": {"used_bytes": 1, "total_bytes": 1800000000000},
+    }
+    disks = reporter_k8s.build_disk_entries("dgxb200-12", fs_map, 1800000000000)
+    assert [d["device"] for d in disks] == ["/dev/md0"]
+
+
 def test_disk_scrape_cadence(reporter_k8s, monkeypatch):
     calls = []
 
