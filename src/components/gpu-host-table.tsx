@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import type { HostLatest } from "@/lib/gpu-types";
+import type { GpuHostAgent, HostLatest } from "@/lib/gpu-types";
 import type {
   NormalizedDiskMetric,
   NormalizedNodeConditions,
@@ -326,6 +326,8 @@ interface GpuHostTableProps {
   hostRows: HostRow[];
   hosts: HostLatest[];
   now: number;
+  /** Buildkite agent (queue + running job) per GPU hostname, when matched. */
+  agents?: Map<string, GpuHostAgent>;
   /** Test hook: render with this hostname's drill-down already expanded. */
   defaultExpanded?: string | null;
 }
@@ -334,6 +336,7 @@ export function GpuHostTable({
   hostRows,
   hosts,
   now,
+  agents,
   defaultExpanded = null,
 }: GpuHostTableProps) {
   const [expanded, setExpanded] = useState<string | null>(defaultExpanded);
@@ -365,6 +368,7 @@ export function GpuHostTable({
           <tbody>
             {hostRows.map((h) => {
               const host = hostsByName.get(h.hostname);
+              const agent = agents?.get(h.hostname);
               const gpuUtil =
                 h.gpuCount > 0 ? Math.round(h.gpuUtil / h.gpuCount) : 0;
               const ago =
@@ -412,6 +416,29 @@ export function GpuHostTable({
                       <span className="ml-2 inline-block w-4 text-center text-base leading-none text-zinc-500 dark:text-zinc-400">
                         {isOpen ? "▾" : "▸"}
                       </span>
+                      {(agent?.queues[0] || agent?.currentJob) && (
+                        <div className="mt-0.5 whitespace-normal text-xs font-normal text-zinc-500 dark:text-zinc-400">
+                          {agent.queues[0] ?? ""}
+                          {agent.queues[0] && agent.currentJob ? " · " : ""}
+                          {agent.currentJob &&
+                            (agent.currentJob.url ? (
+                              <a
+                                href={agent.currentJob.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="hover:underline"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                {agent.currentJob.label ??
+                                  (agent.currentJob.buildNumber != null
+                                    ? `#${agent.currentJob.buildNumber}`
+                                    : "running job")}
+                              </a>
+                            ) : (
+                              (agent.currentJob.label ?? "running job")
+                            ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-5 py-3.5 sm:px-6">{h.gpuType}</td>
                     <td className="px-5 py-3.5 sm:px-6">

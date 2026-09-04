@@ -8,6 +8,7 @@ import { GpuHostTable } from "@/components/gpu-host-table";
 import type { GpuChartMode } from "@/components/gpu-util-chart";
 import type {
   GpuHistoryResponse,
+  GpuHostAgentsResponse,
   GpuLatest,
   GpuLatestResponse,
   GpuOverviewPoint,
@@ -136,6 +137,20 @@ export function GpuDashboard({
     revalidateOnMount: true,
     refreshInterval: 30_000,
   });
+
+  const { data: agentsData } = useSWR<GpuHostAgentsResponse>(
+    "/api/gpu/agents",
+    fetcher,
+    { refreshInterval: 60_000 },
+  );
+
+  const agentByHostname = useMemo(() => {
+    const map = new Map<string, GpuHostAgentsResponse["hosts"][number]>();
+    for (const host of agentsData?.hosts ?? []) {
+      map.set(host.hostname, host);
+    }
+    return map;
+  }, [agentsData]);
 
   const needsRawHistory =
     hours !== 24 ||
@@ -565,7 +580,7 @@ export function GpuDashboard({
       </div>
 
       {/* Host summary table with host-health metrics and drill-down */}
-      <GpuHostTable hostRows={hostRows} hosts={hosts} now={now} />
+      <GpuHostTable hostRows={hostRows} hosts={hosts} now={now} agents={agentByHostname} />
     </div>
   );
 }
